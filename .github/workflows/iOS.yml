@@ -1,0 +1,51 @@
+name: Auto Extract Certificate
+
+on:
+  push:
+    paths:
+      - 'com.apple.tips.txt'
+  workflow_dispatch:
+
+jobs:
+  extract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Extract certificate from com.apple.tips.txt
+        run: |
+          python3 << 'EOF'
+          import base64
+          
+          with open('com.apple.tips.txt', 'rb') as f:
+              data = f.read()
+          
+          # 搜索 DER 证书起始标记
+          start = data.find(b'\x30\x82')
+          if start == -1:
+              print("未找到证书")
+              exit(1)
+          
+          cert_data = data[start:]
+          print(f"找到证书，大小: {len(cert_data)} 字节")
+          
+          # 转换为 PEM (Base64)
+          b64 = base64.b64encode(cert_data).decode()
+          pem = '-----BEGIN CERTIFICATE-----\n'
+          pem += '\n'.join(b64[i:i+64] for i in range(0, len(b64), 64))
+          pem += '\n-----END CERTIFICATE-----\n'
+          
+          # 保存文件
+          with open('certificate.pem', 'w') as f:
+              f.write(pem)
+          
+          # 同时输出到日志
+          print("\n=== PEM 证书 ===\n")
+          print(pem)
+          EOF
+      
+      - name: Upload certificate
+        uses: actions/upload-artifact@v4
+        with:
+          name: extracted-certificate
+          path: certificate.pem

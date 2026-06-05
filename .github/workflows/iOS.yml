@@ -1,30 +1,40 @@
-name: Extract Leaf Certificate
+name: Extract Certificate OIDs
 
 on:
   push:
     branches:
       - main
       - master
+    paths:
+      - 'com.apple.tips.txt'
   workflow_dispatch:
 
 jobs:
-  extract-leaf:
+  extract-oids:
     runs-on: ubuntu-latest
     
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
       
-      - name: Extract leaf certificate from com.apple.tips.txt
+      - name: Install openssl
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y openssl
+      
+      - name: Extract leaf certificate and parse OIDs
         run: |
           python3 << 'EOF'
           import base64
+          import subprocess
+          import tempfile
+          import os
           
-          # 读取二进制文件
+          # 读取文件
           with open('com.apple.tips.txt', 'rb') as f:
               data = f.read()
           
-          # 查找 DER 证书起始标记 (叶子证书)
+          # 找第一个 DER 证书（叶子证书）
           start = data.find(b'\x30\x82')
           if start == -1:
               print("❌ 未找到证书")
@@ -32,50 +42,82 @@ jobs:
           
           # 解析证书长度
           cert_len = (data[start+2] << 8) | data[start+3]
-          total_len = cert_len + 4
-          leaf_cert = data[start:start+total_len]
+          leaf_cert = data[start:start+cert_len+4]
           
           print(f"✅ 找到叶子证书，大小: {len(leaf_cert)} 字节")
           
-          # 转换为 PEM (Base64)
+          # 保存临时文件
+          with tempfile.NamedTemporaryFile(mode='wb', suffix='.der', delete=False) as tmp:
+              tmp.write(leaf_cert)
+              tmp_path = tmp.name
+          
+          # 转换为 PEM
           b64 = base64.b64encode(leaf_cert).decode()
           pem = '-----BEGIN CERTIFICATE-----\n'
           pem += '\n'.join(b64[i:i+64] for i in range(0, len(b64), 64))
           pem += '\n-----END CERTIFICATE-----\n'
           
-          # 保存文件
           with open('leaf.pem', 'w') as f:
               f.write(pem)
+          print("\n✅ 已保存 leaf.pem\n")
           
-          # 输出到日志
-          print("\n" + "="*60)
-          print("📜 叶子证书 (PEM/Base64)")
-          print("="*60)
-          print(pem)
-          print("="*60)
+          # === 提取所有 OID ===
+          print("=" * 60)
+          print("📜 叶子证书中的所有 OID")
+          print("=" * 60)
+          
+          result = subprocess.run(
+              f'openssl x509 -in {tmp_path} -inform DER -text -noout',
+              shell=True, capture_output=True, text=True
+          )
+          
+          # 提取包含数字 OID 的行
+          for line in result.stdout.split('\n'):
+              if any(c.isdigit() for c in line) and '.' in line and 'OID' in line:
+                  print(line.strip())
+              elif '1.2.' in line or '2.5.' in line or '1.2.840' in line:
+                  print(line.strip())
+          
+          # === 专门查找 Team ID OID ===
+          print("\n" + "=" * 60)
+          print("🔑 Team ID OID (1.2.840.113635.100.6.1.15) 详情")
+          print("=" * 60)
+          
+          result2 = subprocess.run(
+              f'openssl asn1parse -inform DER -in {tmp_path} | grep -A 10 "1.2.840.113635.100.6.1.15"',
+              shell=True, capture_output=True, text=True
+          )
+          
+          if result2.stdout:
+              print(result2.stdout)
+          else:
+              print("❌ 未找到 Team ID OID 或值为空")
+          
+          # === 显示证书基本信息 ===
+          print("\n" + "=" * 60)
+          print("📋 证书基本信息")
+          print("=" * 60)
+          
+          result3 = subprocess.run(
+              f'openssl x509 -in {tmp_path} -inform DER -noout -subject -issuer -dates -fingerprint -sha256',
+              shell=True, capture_output=True, text=True
+          )
+          print(result3.stdout)
+          
+          # 清理
+          os.unlink(tmp_path)
           EOF
       
-      - name: Display certificate information
-        run: |
-          if [ -f leaf.pem ]; then
-            echo "=== 证书基本信息 ==="
-            openssl x509 -in leaf.pem -noout -subject -issuer -dates 2>/dev/null || echo "openssl 不可用，跳过"
-            echo ""
-            echo "=== 证书中的 OID ==="
-            openssl x509 -in leaf.pem -text -noout 2>/dev/null | grep -E "([0-9]+\.)+[0-9]+" | head -20 || echo "openssl 不可用"
-          fi
-      
-      - name: Upload certificate as artifact
+      - name: Upload certificate
         uses: actions/upload-artifact@v4
         with:
           name: leaf-certificate
           path: leaf.pem
-          compression-level: 0
       
       - name: Save to workflow summary
         run: |
           if [ -f leaf.pem ]; then
-            echo "### 📜 提取的叶子证书" >> $GITHUB_STEP_SUMMARY
+            echo "### 📜 提取的叶子证书 (PEM)" >> $GITHUB_STEP_SUMMARY
             echo '```' >> $GITHUB_STEP_SUMMARY
             cat leaf.pem >> $GITHUB_STEP_SUMMARY
             echo '```' >> $GITHUB_STEP_SUMMARY

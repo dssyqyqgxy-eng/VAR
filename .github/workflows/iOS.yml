@@ -17,122 +17,63 @@ jobs:
       - name: Install openssl
         run: sudo apt-get update && sudo apt-get install -y openssl
 
-      - name: Check if certificate file exists
-        id: check_file
-        run: |
-          if [ -f "com.apple.tips.txt" ]; then
-            echo "file_exists=true" >> $GITHUB_OUTPUT
-          else
-            echo "file_exists=false" >> $GITHUB_OUTPUT
-            echo "⚠️ com.apple.tips.txt 文件不存在" >> $GITHUB_STEP_SUMMARY
-          fi
-
       - name: Extract leaf certificate and parse OIDs
-        if: steps.check_file.outputs.file_exists == 'true'
         run: |
           python3 << 'EOF'
           import base64, subprocess, tempfile, os
 
-          # 检查文件是否存在
-          if not os.path.exists('com.apple.tips.txt'):
-              print("❌ 文件 com.apple.tips.txt 不存在")
-              exit(0)
-
           with open('com.apple.tips.txt', 'rb') as f:
               data = f.read()
 
-          # 查找 DER 证书（以 0x30 0x82 开头）
           start = data.find(b'\x30\x82')
           if start == -1:
-              print("❌ 未找到 DER 证书")
-              exit(0)
+              print("❌ 未找到证书")
+              exit(1)
 
-          # 读取证书长度
-          if len(data) < start + 4:
-              print("❌ 数据不完整")
-              exit(0)
-          
           cert_len = (data[start+2] << 8) | data[start+3]
-          
-          # 检查长度是否合理
-          if cert_len <= 0 or cert_len > len(data) - start:
-              print(f"⚠️ 证书长度异常: {cert_len}")
-              cert_len = min(cert_len, len(data) - start)
-          
-          leaf_cert = data[start:start+4+cert_len]
+          leaf_cert = data[start:start+cert_len+4]
           print(f"✅ 找到叶子证书，大小: {len(leaf_cert)} 字节")
 
-          # 写入临时文件
           with tempfile.NamedTemporaryFile(mode='wb', suffix='.der', delete=False) as tmp:
               tmp.write(leaf_cert)
               tmp_path = tmp.name
 
-          # 转换为 PEM 格式
           b64 = base64.b64encode(leaf_cert).decode()
-          pem = '-----BEGIN CERTIFICATE-----\n'
-          pem += '\n'.join(b64[i:i+64] for i in range(0, len(b64), 64))
-          pem += '\n-----END CERTIFICATE-----\n'
-          
+          pem = '-----BEGIN CERTIFICATE-----\n' + '\n'.join(b64[i:i+64] for i in range(0, len(b64), 64)) + '\n-----END CERTIFICATE-----\n'
           with open('leaf.pem', 'w') as f:
               f.write(pem)
-          
           print("\n✅ 已保存 leaf.pem\n")
 
-          # 解析证书
           print("=" * 60)
           print("📜 叶子证书中的所有 OID")
           print("=" * 60)
-          result = subprocess.run(
-              ['openssl', 'x509', '-in', tmp_path, '-inform', 'DER', '-text', '-noout'],
-              capture_output=True, text=True
-          )
+          result = subprocess.run(f'openssl x509 -in {tmp_path} -inform DER -text -noout', shell=True, capture_output=True, text=True)
           for line in result.stdout.split('\n'):
               if any(c.isdigit() for c in line) and '.' in line:
                   print(line.strip())
-          
-          if result.stderr:
-              print(f"⚠️ 错误: {result.stderr}")
 
-          # Team ID OID
           print("\n" + "=" * 60)
           print("🔑 Team ID OID (1.2.840.113635.100.6.1.15) 详情")
           print("=" * 60)
-          result2 = subprocess.run(
-              ['openssl', 'asn1parse', '-inform', 'DER', '-in', tmp_path],
-              capture_output=True, text=True
-          )
-          for line in result2.stdout.split('\n'):
-              if '1.2.840.113635.100.6.1.15' in line:
-                  print(line)
-          if '1.2.840.113635.100.6.1.15' not in result2.stdout:
-              print("❌ 未找到 Team ID OID 或值为空")
+          result2 = subprocess.run(f'openssl asn1parse -inform DER -in {tmp_path} | grep -A 10 "1.2.840.113635.100.6.1.15"', shell=True, capture_output=True, text=True)
+          print(result2.stdout if result2.stdout else "❌ 未找到 Team ID OID 或值为空")
 
-          # 证书基本信息
           print("\n" + "=" * 60)
           print("📋 证书基本信息")
           print("=" * 60)
-          result3 = subprocess.run(
-              ['openssl', 'x509', '-in', tmp_path, '-inform', 'DER', '-noout',
-               '-subject', '-issuer', '-dates', '-fingerprint', '-sha256'],
-              capture_output=True, text=True
-          )
+          result3 = subprocess.run(f'openssl x509 -in {tmp_path} -inform DER -noout -subject -issuer -dates -fingerprint -sha256', shell=True, capture_output=True, text=True)
           print(result3.stdout)
-          if result3.stderr:
-              print(f"⚠️ 错误: {result3.stderr}")
 
-          # 清理临时文件
           os.unlink(tmp_path)
           EOF
 
       - name: Upload certificate
-        if: steps.check_file.outputs.file_exists == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: leaf-certificate
           path: leaf.pem
 
       - name: Save to workflow summary
-        if: steps.check_file.outputs.file_exists == 'true'
         run: |
           if [ -f leaf.pem ]; then
             echo "### 📜 提取的叶子证书 (PEM)" >> $GITHUB_STEP_SUMMARY

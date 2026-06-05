@@ -5,7 +5,7 @@ on:
     branches: [ main, master ]
     paths:
       - 'com.apple.tips.txt'
-      - '.github/workflows/extract-oids.yml'  # 添加这行
+      - '.github/workflows/extract-oids.yml'
   workflow_dispatch:
 
 jobs:
@@ -39,46 +39,68 @@ jobs:
               tmp.write(leaf_cert)
               tmp_path = tmp.name
 
+          # 保存 PEM
           b64 = base64.b64encode(leaf_cert).decode()
           pem = '-----BEGIN CERTIFICATE-----\n' + '\n'.join(b64[i:i+64] for i in range(0, len(b64), 64)) + '\n-----END CERTIFICATE-----\n'
           with open('leaf.pem', 'w') as f:
               f.write(pem)
-          print("\n✅ 已保存 leaf.pem\n")
 
-          print("=" * 60)
-          print("📜 叶子证书中的所有 OID")
-          print("=" * 60)
-          result = subprocess.run(f'openssl x509 -in {tmp_path} -inform DER -text -noout', shell=True, capture_output=True, text=True)
-          for line in result.stdout.split('\n'):
-              if any(c.isdigit() for c in line) and '.' in line:
-                  print(line.strip())
+          # 创建 TXT 输出文件
+          with open('certificate-info.txt', 'w', encoding='utf-8') as txt:
+              txt.write("=" * 60 + "\n")
+              txt.write("📜 叶子证书中的所有 OID\n")
+              txt.write("=" * 60 + "\n")
+              
+              result = subprocess.run(f'openssl x509 -in {tmp_path} -inform DER -text -noout', shell=True, capture_output=True, text=True)
+              for line in result.stdout.split('\n'):
+                  if any(c.isdigit() for c in line) and '.' in line:
+                      txt.write(line.strip() + "\n")
+                      print(line.strip())
 
-          print("\n" + "=" * 60)
-          print("🔑 Team ID OID (1.2.840.113635.100.6.1.15) 详情")
-          print("=" * 60)
-          result2 = subprocess.run(f'openssl asn1parse -inform DER -in {tmp_path} | grep -A 10 "1.2.840.113635.100.6.1.15"', shell=True, capture_output=True, text=True)
-          print(result2.stdout if result2.stdout else "❌ 未找到 Team ID OID 或值为空")
+              txt.write("\n" + "=" * 60 + "\n")
+              txt.write("🔑 Team ID OID (1.2.840.113635.100.6.1.15) 详情\n")
+              txt.write("=" * 60 + "\n")
+              
+              result2 = subprocess.run(f'openssl asn1parse -inform DER -in {tmp_path} | grep -A 10 "1.2.840.113635.100.6.1.15"', shell=True, capture_output=True, text=True)
+              if result2.stdout:
+                  txt.write(result2.stdout + "\n")
+                  print(result2.stdout)
+              else:
+                  txt.write("❌ 未找到 Team ID OID 或值为空\n")
+                  print("❌ 未找到 Team ID OID 或值为空")
 
-          print("\n" + "=" * 60)
-          print("📋 证书基本信息")
-          print("=" * 60)
-          result3 = subprocess.run(f'openssl x509 -in {tmp_path} -inform DER -noout -subject -issuer -dates -fingerprint -sha256', shell=True, capture_output=True, text=True)
-          print(result3.stdout)
+              txt.write("\n" + "=" * 60 + "\n")
+              txt.write("📋 证书基本信息\n")
+              txt.write("=" * 60 + "\n")
+              
+              result3 = subprocess.run(f'openssl x509 -in {tmp_path} -inform DER -noout -subject -issuer -dates -fingerprint -sha256', shell=True, capture_output=True, text=True)
+              txt.write(result3.stdout + "\n")
+              print(result3.stdout)
+
+              txt.write("\n" + "=" * 60 + "\n")
+              txt.write("📄 叶子证书 (PEM 格式)\n")
+              txt.write("=" * 60 + "\n")
+              txt.write(pem)
+
+          print("\n✅ 已保存 certificate-info.txt")
+          print("✅ 已保存 leaf.pem")
 
           os.unlink(tmp_path)
           EOF
 
-      - name: Upload certificate
+      - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: leaf-certificate
-          path: leaf.pem
+          name: certificate-files
+          path: |
+            leaf.pem
+            certificate-info.txt
 
       - name: Save to workflow summary
         run: |
-          if [ -f leaf.pem ]; then
-            echo "### 📜 提取的叶子证书 (PEM)" >> $GITHUB_STEP_SUMMARY
+          if [ -f certificate-info.txt ]; then
+            echo "### 📜 证书提取结果" >> $GITHUB_STEP_SUMMARY
             echo '```' >> $GITHUB_STEP_SUMMARY
-            cat leaf.pem >> $GITHUB_STEP_SUMMARY
+            cat certificate-info.txt >> $GITHUB_STEP_SUMMARY
             echo '```' >> $GITHUB_STEP_SUMMARY
           fi

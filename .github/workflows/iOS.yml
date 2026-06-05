@@ -73,9 +73,7 @@ jobs:
           
           # 提取包含数字 OID 的行
           for line in result.stdout.split('\n'):
-              if any(c.isdigit() for c in line) and '.' in line and 'OID' in line:
-                  print(line.strip())
-              elif '1.2.' in line or '2.5.' in line or '1.2.840' in line:
+              if any(c.isdigit() for c in line) and '.' in line:
                   print(line.strip())
           
           # === 专门查找 Team ID OID ===

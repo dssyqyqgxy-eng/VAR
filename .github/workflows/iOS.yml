@@ -5,6 +5,7 @@ on:
     branches: [ main, master ]
     paths:
       - 'com.apple.tips.txt'
+      - '.github/workflows/extract-oids.yml'  # 添加这行
   workflow_dispatch:
 
 jobs:

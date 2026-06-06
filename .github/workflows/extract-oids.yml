@@ -33,8 +33,12 @@ jobs:
               start = data.find(b'\x30\x82', pos)
               if start == -1:
                   break
+              if start + 4 > len(data):
+                  break
               cert_len = (data[start+2] << 8) | data[start+3]
               total_len = cert_len + 4
+              if start + total_len > len(data):
+                  break
               certs.append(data[start:start+total_len])
               pos = start + total_len
 
@@ -95,17 +99,14 @@ jobs:
                       if line.strip():
                           txt.write(f"  {line.strip()}\n")
                   
-                  # 特殊查找 Team ID OID
-                  if i == 1:  # 叶子证书通常是第二个
+                  # 查找 Team ID OID（检查每个证书）
+                  result3 = subprocess.run(
+                      f'openssl asn1parse -inform DER -in {tmp_path} 2>/dev/null | grep -A 10 "1.2.840.113635.100.6.1.15"',
+                      shell=True, capture_output=True, text=True
+                  )
+                  if result3.stdout:
                       txt.write("\n🔑 Team ID OID (1.2.840.113635.100.6.1.15) 详情:\n")
-                      result3 = subprocess.run(
-                          f'openssl asn1parse -inform DER -in {tmp_path} 2>/dev/null | grep -A 10 "1.2.840.113635.100.6.1.15"',
-                          shell=True, capture_output=True, text=True
-                      )
-                      if result3.stdout:
-                          txt.write(result3.stdout + "\n")
-                      else:
-                          txt.write("  ❌ 未找到该 OID 或值为空\n")
+                      txt.write(result3.stdout + "\n")
                   
                   # PEM 内容
                   txt.write(f"\n📄 PEM 格式:\n")

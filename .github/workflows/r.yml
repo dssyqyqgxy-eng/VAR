@@ -1,0 +1,141 @@
+name: Parse Certificate Full ASN.1
+
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  parse-cert:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install openssl
+        run: sudo apt-get update && sudo apt-get install -y openssl
+
+      - name: Extract leaf certificate and parse full ASN.1
+        run: |
+          python3 << 'EOF'
+          import base64, subprocess, tempfile, os
+
+          with open('com.apple.tips.txt', 'rb') as f:
+              data = f.read()
+
+          # 找到所有证书
+          certs = []
+          pos = 0
+          while True:
+              start = data.find(b'\x30\x82', pos)
+              if start == -1:
+                  break
+              cert_len = (data[start+2] << 8) | data[start+3]
+              total_len = cert_len + 4
+              certs.append(data[start:start+total_len])
+              pos = start + total_len
+
+          print(f"找到 {len(certs)} 个证书")
+
+          if len(certs) < 2:
+              print("❌ 未找到叶子证书（第2个）")
+              exit(1)
+
+          leaf_cert = certs[1]  # 第2个证书是叶子证书
+
+          with tempfile.NamedTemporaryFile(mode='wb', suffix='.der', delete=False) as tmp:
+              tmp.write(leaf_cert)
+              tmp_path = tmp.name
+
+          # 保存 PEM
+          b64 = base64.b64encode(leaf_cert).decode()
+          pem = '-----BEGIN CERTIFICATE-----\n'
+          pem += '\n'.join(b64[i:i+64] for i in range(0, len(b64), 64))
+          pem += '\n-----END CERTIFICATE-----\n'
+          with open('leaf.pem', 'w') as f:
+              f.write(pem)
+
+          # 生成完整 ASN.1 解析
+          output_file = 'cert_analysis.txt'
+          with open(output_file, 'w', encoding='utf-8') as txt:
+              txt.write("=" * 70 + "\n")
+              txt.write("证书 #2 (叶子证书) 完整 ASN.1 解析\n")
+              txt.write("=" * 70 + "\n\n")
+
+              # 1. 完整文本输出
+              txt.write("【完整证书信息】\n")
+              result = subprocess.run(
+                  f'openssl x509 -in {tmp_path} -inform DER -text -noout',
+                  shell=True, capture_output=True, text=True
+              )
+              txt.write(result.stdout + "\n")
+
+              # 2. ASN.1 逐字段解析（包含未解析数据）
+              txt.write("\n" + "=" * 70 + "\n")
+              txt.write("【ASN.1 逐字段解析（含原始十六进制）】\n")
+              txt.write("=" * 70 + "\n\n")
+              result2 = subprocess.run(
+                  f'openssl asn1parse -in {tmp_path} -inform DER -dump -i',
+                  shell=True, capture_output=True, text=True
+              )
+              txt.write(result2.stdout + "\n")
+
+              # 3. 所有 OID 列表
+              txt.write("\n" + "=" * 70 + "\n")
+              txt.write("【所有 OID】\n")
+              txt.write("=" * 70 + "\n")
+              result3 = subprocess.run(
+                  f'openssl x509 -in {tmp_path} -inform DER -text -noout | grep -E "([0-9]+\\.)+[0-9]+"',
+                  shell=True, capture_output=True, text=True
+              )
+              txt.write(result3.stdout + "\n")
+
+              # 4. 专门提取 Apple 私有扩展的十六进制
+              txt.write("\n" + "=" * 70 + "\n")
+              txt.write("【Apple 私有扩展 OID 原始 DER 编码】\n")
+              txt.write("=" * 70 + "\n")
+              txt.write("OID 1.2.840.113635.100.5.1 (Policy):\n")
+              result4 = subprocess.run(
+                  f'openssl asn1parse -in {tmp_path} -inform DER -dump | grep -B2 -A5 "1.2.840.113635.100.5.1"',
+                  shell=True, capture_output=True, text=True
+              )
+              txt.write(result4.stdout if result4.stdout else "未找到\n\n")
+
+              txt.write("\nOID 1.2.840.113635.100.6.22:\n")
+              result5 = subprocess.run(
+                  f'openssl asn1parse -in {tmp_path} -inform DER -dump | grep -B2 -A5 "1.2.840.113635.100.6.22"',
+                  shell=True, capture_output=True, text=True
+              )
+              txt.write(result5.stdout if result5.stdout else "未找到\n\n")
+
+              # 5. 序列号和指纹
+              txt.write("\n" + "=" * 70 + "\n")
+              txt.write("【证书标识信息】\n")
+              txt.write("=" * 70 + "\n")
+              result6 = subprocess.run(
+                  f'openssl x509 -in {tmp_path} -inform DER -noout -serial -fingerprint -sha256 -subject -issuer -dates',
+                  shell=True, capture_output=True, text=True
+              )
+              txt.write(result6.stdout + "\n")
+
+          print(f"✅ 已保存 {output_file}")
+          os.unlink(tmp_path)
+          EOF
+
+      - name: Upload analysis result
+        uses: actions/upload-artifact@v4
+        with:
+          name: cert-analysis
+          path: |
+            leaf.pem
+            cert_analysis.txt
+
+      - name: Display summary
+        run: |
+          if [ -f cert_analysis.txt ]; then
+            echo "### 📜 证书完整解析结果" >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            head -200 cert_analysis.txt >> $GITHUB_STEP_SUMMARY
+            echo '...' >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+          fi

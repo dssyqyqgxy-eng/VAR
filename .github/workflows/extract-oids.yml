@@ -5,7 +5,7 @@ on:
     branches: [ main, master ]
     paths:
       - 'com.apple.tips.txt'
-      - '.github/workflows/extract-all.yml'
+      - '.github/workflows/extract-oids.yml'
   workflow_dispatch:
 
 jobs:

@@ -11,53 +11,52 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: 自动提取所有关键 RVA
+      - name: 深度提取 RVA
         run: |
           {
             echo "=========================================="
-            echo "  空洞骑士 Mod 关键 RVA 提取"
-            echo "  时间: $(date)"
+            echo "  空洞骑士 Mod 深度 RVA 提取"
             echo "=========================================="
             echo ""
             
-            echo "[1] HeroController.TakeDamage RVA"
-            grep -A 3 "HeroController.*TakeDamage" dump.cs | grep "RVA:" | head -5
+            echo "[1] HeroController.TakeDamage (HitInstance) - 搜 'void TakeDamage'"
+            grep -B 2 "void TakeDamage" dump.cs | grep "RVA:" | head -5
             echo ""
             
-            echo "[2] HealthManager.TakeDamage RVA"
-            grep -A 3 "HealthManager.*TakeDamage" dump.cs | grep "RVA:" | head -5
+            echo "[2] HeroController.TakeDamage (GameObject) - 搜完整签名"
+            grep -B 2 "void TakeDamage.*GameObject" dump.cs | head -5
             echo ""
             
-            echo "[3] HealthManager.Hit RVA"
-            grep -A 3 "HealthManager.*Hit" dump.cs | grep "RVA:" | head -5
+            echo "[3] HealthManager.TakeDamage - 搜类内部"
+            grep -B 2 "HealthManager.*TakeDamage\|class HealthManager" dump.cs | grep "RVA:" | head -5
             echo ""
             
-            echo "[4] ShadowDash RVA"
-            grep -A 1 "ShadowDash" dump.cs | grep "RVA:" | head -5
+            echo "[4] HealthManager.Hit - 搜 'void Hit'"
+            grep -B 2 "void Hit" dump.cs | grep "RVA:" | head -5
             echo ""
             
-            echo "[5] 攻击冷却 / 黑冲 字段偏移"
-            grep -E "attack_cooldown|hasShadowDash|canShadowDash|SHADOW_DASH" dump.cs | head -10
+            echo "[5] ShadowDash - 搜 'void ShadowDash'"
+            grep -B 2 "void ShadowDash" dump.cs | head -5
             echo ""
             
-            echo "[6] HealthManager.hp 偏移"
-            grep -E "public int hp" dump.cs | head -10
+            echo "[6] tk2dSpriteAnimator.Play - 搜类+Play方法"
+            grep -A 200 "class tk2dSpriteAnimator" dump.cs | grep -B 1 "void Play\|public void Play" | grep "RVA:" | head -5
             echo ""
             
-            echo "[7] tk2dSpriteAnimator.Play RVA"
-            grep -A 1 "public void Play" dump.cs | grep "RVA:" | head -5
+            echo "[7] 确认的字段偏移"
+            echo "SHADOW_DASH_COOLDOWN: 0x80"
+            echo "attack_cooldown: 0x214"
+            echo "canShadowDash: 0x124"
+            echo "hasShadowDash: 0x15B"
+            echo "hp: 0xE8"
+            echo "SHADOW_DASH_SPEED: 0x78"
+            echo "SHADOW_DASH_TIME: 0x7C"
             echo ""
             
-            echo "[8] BossSceneController 相关"
-            grep -A 3 "BossSceneController" dump.cs | grep "RVA:" | head -10
-            echo ""
-            
-            echo "=========================================="
-            echo "  提取完成"
             echo "=========================================="
           } > extracted_rva.txt
 
-      - name: 上传提取结果
+      - name: 上传结果
         uses: actions/upload-artifact@v4
         with:
           name: extracted-rva

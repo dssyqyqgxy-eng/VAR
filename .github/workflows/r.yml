@@ -1,4 +1,4 @@
-name: 自动编译 Mod.dylib
+name: 自动编译并签名 Mod.dylib
 on:
   push:
 
@@ -8,20 +8,14 @@ jobs:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
-      
-      - name: 查找 iOS SDK 路径
+
+      - name: 安装 ldid
         run: |
-          echo "可用的 SDK:"
-          xcodebuild -showsdks 2>/dev/null | grep -E "iOS|iphoneos"
-          
+          brew install ldid 2>/dev/null || echo "ldid 已安装或安装失败，尝试继续..."
+
       - name: 编译 Mod.dylib
         run: |
-          SDK_PATH=$(xcrun --sdk iphoneos --show-sdk-path 2>/dev/null || echo "")
-          if [ -z "$SDK_PATH" ]; then
-            SDK_PATH="/Applications/Xcode_16.4.app/Contents/Developer/Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS.sdk"
-          fi
-          echo "使用 SDK: $SDK_PATH"
-          
+          SDK_PATH=$(xcrun --sdk iphoneos --show-sdk-path 2>/dev/null)
           clang -arch arm64 \
             -miphoneos-version-min=12.0 \
             -isysroot "$SDK_PATH" \
@@ -31,6 +25,11 @@ jobs:
             -o Mod.dylib \
             Mod.m \
             -Wno-everything
+
+      - name: 签名 Mod.dylib
+        run: |
+          ldid -S Mod.dylib
+          echo "✅ 签名完成"
 
       - name: 上传 Mod.dylib
         uses: actions/upload-artifact@v4

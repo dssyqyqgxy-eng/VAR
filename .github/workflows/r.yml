@@ -2,8 +2,7 @@ name: 自动搜索 HealthManager RVA
 
 on:
   push:
-    paths:
-      - 'dump.cs'
+
   workflow_dispatch:
 
 jobs:

@@ -1,47 +1,21 @@
-name: 自动搜索 HealthManager RVA
-
+name: 自动编译 Mod.dylib
 on:
   push:
-
+    paths:
+      - 'Mod.c'
   workflow_dispatch:
-
 jobs:
-  extract:
-    runs-on: ubuntu-latest
+  build:
+    runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
-
-      - name: 深度搜索 HealthManager
+      - name: 编译 Mod.dylib
         run: |
-          {
-            echo "=========================================="
-            echo "  HealthManager 深度搜索"
-            echo "=========================================="
-            echo ""
-            
-            echo "[1] class HealthManager 完整定义"
-            grep -A 100 "class HealthManager :" dump.cs | head -120
-            echo ""
-            
-            echo "[2] HealthManager 所有方法 RVA"
-            grep -A 100 "class HealthManager :" dump.cs | grep -E "void |bool |int |float |RVA:" | head -50
-            echo ""
-            
-            echo "[3] HealthManager 的 Hit / TakeDamage"
-            grep -B 10 "void TakeDamage\|void Hit" dump.cs | grep -E "class HealthManager|RVA:" | head -20
-            echo ""
-            
-            echo "[4] ApplyExtraDamage"
-            grep -B 2 "ApplyExtraDamage" dump.cs | grep "RVA:" | head -5
-            echo ""
-            
-            echo "[5] HealthManager.Die"
-            grep -B 2 "void Die" dump.cs | grep -E "HealthManager|RVA:" | head -5
-            
-          } > healthmanager_rva.txt
-
-      - name: 上传结果
+          clang -arch arm64 -miphoneos-version-min=12.0 -dynamiclib \
+            -framework Foundation -framework UIKit \
+            -o Mod.dylib Mod.c -Wno-everything
+      - name: 上传 Mod.dylib
         uses: actions/upload-artifact@v4
         with:
-          name: healthmanager-rva
-          path: healthmanager_rva.txt
+          name: Mod.dylib
+          path: Mod.dylib

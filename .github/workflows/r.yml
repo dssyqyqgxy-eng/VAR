@@ -1,28 +1,117 @@
-name: 搜索黑冲粒子特效字段偏移
+name: 编译 Mod + 精确修改黑冲冷却元数据
 on:
   push:
 
   workflow_dispatch:
 jobs:
-  analyze:
-    runs-on: ubuntu-latest
+  build-and-patch:
+    runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
-      - name: 解压
-        run: unzip -o script.zip
-      - name: 搜索
+
+      # ========== 1. 编译 Mod.dylib ==========
+      - name: 编译 Mod.dylib
         run: |
-          DUMP=$(find . -name "dump.cs" | head -1)
-          echo "=== 黑冲粒子/Burst 字段 ==="
-          grep -n "shadowdash\|shadow_dash\|shadowDash" "$DUMP" | grep -iE "burst|particle|prefab|effect|vfx" | head -20
-          echo ""
-          echo "=== ShadowDash 函数完整代码 ==="
-          grep -A 50 "private void ShadowDash" "$DUMP" | head -60
-          echo ""
-          echo "=== HeroController 中所有 shadow 相关字段 ==="
-          grep -n "shadow\|Shadow" "$DUMP" | grep "0x" | head -30
-      - name: 上传
+          SDK_PATH=$(xcrun --sdk iphoneos --show-sdk-path)
+          clang -arch arm64 -miphoneos-version-min=12.0 -isysroot "$SDK_PATH" \
+            -dynamiclib -framework Foundation -framework UIKit \
+            -o Mod.dylib Mod.m -Wno-everything
+          echo "✅ 编译完成"
+
+      - name: 签名 Mod.dylib
+        run: |
+          codesign -f -s - Mod.dylib 2>/dev/null || echo "⚠️ 签名跳过"
+          echo "✅ 签名完成"
+
+      # ========== 2. 精确定位并修改 metadata ==========
+      - name: 解压 script.zip
+        run: unzip -o script.zip
+
+      - name: 精确定位黑冲冷却默认值
+        run: |
+          python3 << 'PYEOF'
+          import struct, glob, json
+
+          # 找到字段名字符串在 metadata 中的位置
+          with open('global-metadata.dat', 'rb') as f:
+              data = bytearray(f.read())
+
+          # 找到 "SHADOW_DASH_COOLDOWN" 字符串
+          cooldown_str_pos = data.find(b"SHADOW_DASH_COOLDOWN")
+          if cooldown_str_pos == -1:
+              print("❌ 未找到 SHADOW_DASH_COOLDOWN 字符串")
+              exit(1)
+          print(f"✅ SHADOW_DASH_COOLDOWN 字符串 @ 0x{cooldown_str_pos:07X}")
+
+          # 搜索所有引用这个字符串地址的位置
+          str_ref = struct.pack('<I', cooldown_str_pos)
+          ref_positions = []
+          pos = 0
+          while True:
+              pos = data.find(str_ref, pos)
+              if pos == -1: break
+              ref_positions.append(pos)
+              pos += 1
+          print(f"   被 {len(ref_positions)} 处引用: {[hex(p) for p in ref_positions[:5]]}")
+
+          # 在每个引用附近搜索 0.5f (0x0000003F)
+          print("\n=== 精确定位黑冲冷却的 0.5f ===")
+          found = False
+          for ref_pos in ref_positions:
+              # 在引用位置前后 64 字节搜索 0.5f
+              start = max(0, ref_pos - 64)
+              end = min(len(data), ref_pos + 64)
+              region = data[start:end]
+              pattern = struct.pack('<f', 0.5)
+              p = region.find(pattern)
+              if p != -1:
+                  actual_pos = start + p
+                  # 验证：检查这个位置前面的字节模式
+                  ctx_before = data[max(0, actual_pos-16):actual_pos]
+                  ctx_after = data[actual_pos+4:min(len(data), actual_pos+20)]
+                  print(f"✅ 找到: 0x{actual_pos:07X}")
+                  print(f"   前: {ctx_before.hex()}")
+                  print(f"   后: {ctx_after.hex()}")
+                  
+                  # 修改
+                  new_val = struct.pack('<f', 0.0)
+                  data[actual_pos:actual_pos+4] = new_val
+                  print(f"   ✅ 已修改为 0.0f")
+                  found = True
+                  break
+
+          if not found:
+              print("❌ 未找到黑冲冷却的 0.5f，回退到全局搜索...")
+              pattern = struct.pack('<f', 0.5)
+              pos = 0
+              while True:
+                  pos = data.find(pattern, pos)
+                  if pos == -1: break
+                  # 检查这个位置附近是否有 SHADOW_DASH_COOLDOWN 引用
+                  nearby = data[max(0,pos-64):min(len(data),pos+64)]
+                  if b"SHADOW_DASH" in nearby or b"cooldown" in nearby.lower():
+                      print(f"✅ 关联找到: 0x{pos:07X}")
+                      data[pos:pos+4] = struct.pack('<f', 0.0)
+                      found = True
+                  pos += 1
+
+          if found:
+              with open('global-metadata.dat', 'wb') as f:
+                  f.write(data)
+              print("\n✅ 元数据修改完成")
+          else:
+              print("\n⚠️ 未修改任何值")
+          PYEOF
+
+      # ========== 3. 上传产物 ==========
+      - name: 上传 Mod.dylib
         uses: actions/upload-artifact@v4
         with:
-          name: shadow-particles
-          path: $(find . -name "*.txt" | head -1)
+          name: Mod.dylib
+          path: Mod.dylib
+
+      - name: 上传修改后的元数据
+        uses: actions/upload-artifact@v4
+        with:
+          name: global-metadata-patched
+          path: global-metadata.dat

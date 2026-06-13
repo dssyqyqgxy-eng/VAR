@@ -1,58 +1,37 @@
-name: 解析 UnityFramework 段信息
+name: 自动搜索 DATA 段可修改值
 on:
   push:
+    paths:
+      - 'UnityFramework.zip'
   workflow_dispatch:
 jobs:
   analyze:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
-      - name: 解压并解析
+      - name: 搜索 DATA 段
         run: |
           unzip -o UnityFramework.zip
-          
           python3 << 'PYEOF'
           import struct
-
           with open('UnityFramework', 'rb') as f:
               data = f.read()
-
-          magic = struct.unpack('<I', data[0:4])[0]
-          print(f"Magic: 0x{magic:08X}")
-
-          ncmds = struct.unpack('<I', data[16:20])[0]
-          print(f"Load commands: {ncmds}\n")
-
-          offset = 32
-          for i in range(ncmds):
-              cmd = struct.unpack('<I', data[offset:offset+4])[0]
-              cmdsize = struct.unpack('<I', data[offset+4:offset+8])[0]
-              
-              if cmd == 0x19:
-                  segname = data[offset+8:offset+24].decode('utf-8').strip('\x00')
-                  vmaddr = struct.unpack('<Q', data[offset+24:offset+32])[0]
-                  vmsize = struct.unpack('<Q', data[offset+32:offset+40])[0]
-                  fileoff = struct.unpack('<Q', data[offset+40:offset+48])[0]
-                  filesize = struct.unpack('<Q', data[offset+48:offset+56])[0]
-                  
-                  print(f"{segname:20s} VM: 0x{vmaddr:09X}-0x{vmaddr+vmsize:09X} 文件: 0x{fileoff:08X}-0x{fileoff+filesize:08X}")
-              offset += cmdsize
-
-          # 验证 RVA
-          print("\n=== RVA 是否在 __TEXT 段内 ===")
-          rvas = {
-              "TakeDamage": 0x102614C,
-              "ShadowDash": 0x102D4DC,
-              "DoAttack": 0x102FF1C,
-              "AnimPlay": 0x1314A7C,
-              "ApplyExtraDamage": 0x1022A58,
-          }
-          for name, rva in rvas.items():
-              print(f"  {name}: 0x{rva:X}")
+          ds, de = 0x021A8000, 0x023E4000
+          seg = data[ds:de]
+          print(f"__DATA: {len(seg)} 字节\n")
+          for val, name in [(0.4, "攻击冷却"), (0.5, "黑冲冷却"), (0.3, "黑冲时间"), (15.0, "黑冲速度")]:
+              p = struct.pack('<f', val)
+              c, pos = 0, 0
+              while True:
+                  pos = seg.find(p, pos)
+                  if pos == -1: break
+                  a = ds + pos
+                  ctx = data[max(0,a-8):min(len(data),a+12)]
+                  print(f"{name} ({val}f) @ 0x{a:08X}: {ctx.hex()}")
+                  c += 1; pos += 4
+              print(f"共 {c} 处\n")
           PYEOF
-
       - uses: actions/upload-artifact@v4
         with:
-          name: segment-analysis
+          name: data-analysis
           path: $(find . -name "*.txt" | head -1)

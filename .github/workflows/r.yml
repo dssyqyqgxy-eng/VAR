@@ -1,58 +1,26 @@
-name: 查找 SHADOW_DASH_COOLDOWN 数据源
+name: 编译 Mod.dylib
 on:
   push:
+    
   workflow_dispatch:
 jobs:
-  search:
-    runs-on: ubuntu-latest
+  build:
+    runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
-      - name: 解压
-        run: unzip -o UnityFramework.zip
-      - name: 安装 capstone
-        run: pip install capstone
-      - name: 搜索
+
+      - name: 编译
         run: |
-          python3 << 'PYEOF'
-          import struct
-          from capstone import Cs, CS_ARCH_ARM64, CS_MODE_ARM
+          SDK_PATH=$(xcrun --sdk iphoneos --show-sdk-path)
+          clang -arch arm64 -miphoneos-version-min=12.0 -isysroot "$SDK_PATH" \
+            -dynamiclib -framework Foundation -framework UIKit \
+            -o Mod.dylib Mod.m -Wno-everything
+          codesign -f -s - Mod.dylib 2>/dev/null || true
+          echo "✅ 编译完成"
+          ls -la Mod.dylib
 
-          with open('UnityFramework', 'rb') as f:
-              data = f.read()
-
-          md = Cs(CS_ARCH_ARM64, CS_MODE_ARM)
-
-          # ldr s0, [x20, #0x2624]
-          target = 0xBD400000 | (20 << 5) | (0x989 << 10)
-          pattern = struct.pack('<I', target)
-
-          pos = 0
-          found = []
-          while pos < 0x021A8000:
-              pos = data.find(pattern, pos)
-              if pos == -1: break
-              found.append(pos)
-              pos += 1
-
-          print(f"找到 {len(found)} 处\n")
-
-          for addr in found:
-              print(f"=== @ 0x{addr:08X} ===")
-              code = data[max(0,addr-48):min(len(data),addr+48)]
-              for ins in md.disasm(code, max(0,addr-48)):
-                  m = "  <-- SHADOW_DASH_COOLDOWN" if ins.address == addr else ""
-                  print(f"  0x{ins.address:x}: {ins.mnemonic} {ins.op_str}{m}")
-              print()
-
-          # 搜索 DATA 段 0x2624 附近的值
-          print("=== DATA 段 0x2624 附近的值 ===")
-          for off in range(0x2624-0x20, 0x2624+0x20, 4):
-              addr = 0x021A8000 + off
-              if addr + 4 <= len(data):
-                  val = struct.unpack('<f', data[addr:addr+4])[0]
-                  print(f"  0x{addr:08X} (+0x{off:X}): {val}f")
-          PYEOF
-      - uses: actions/upload-artifact@v4
+      - name: 上传
+        uses: actions/upload-artifact@v4
         with:
-          name: shadow-cooldown-data
-          path: $(find . -name "*.txt" | head -1)
+          name: Mod.dylib
+          path: Mod.dylib

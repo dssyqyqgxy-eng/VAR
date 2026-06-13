@@ -12,82 +12,69 @@ jobs:
       - name: 解压
         run: unzip -o script.zip
 
-      - name: 精确定位字段默认值
+      - name: 分析 metadata
         run: |
           python3 << 'PYEOF'
           import struct
 
+          def find_all(data, pattern):
+              pos = 0
+              while True:
+                  pos = data.find(pattern, pos)
+                  if pos == -1: break
+                  yield pos
+                  pos += 1
+
           with open('global-metadata.dat', 'rb') as f:
               data = f.read()
 
-          print(f"文件大小: {len(data)} 字节")
-          print(f"Magic: {data[:4].hex()}")
+          print(f"文件大小: {len(data)} 字节\n")
 
-          # ==========================================
-          # 1. 搜索字段名字符串
-          # ==========================================
-          fields = [
-              b"attack_cooldown",
-              b"SHADOW_DASH_COOLDOWN",
-              b"hasShadowDash",
-              b"canShadowDash",
-              b"SHADOW_DASH_SPEED",
-              b"SHADOW_DASH_TIME",
-          ]
-
-          print("\n=== 字段名在 metadata 中的位置 ===")
-          field_positions = {}
-          for field in fields:
-              pos = data.find(field)
+          # ========== 字段名位置 ==========
+          fields = {
+              b"attack_cooldown": (0.15, 'float'),
+              b"SHADOW_DASH_COOLDOWN": (0.0, 'float'),
+              b"SHADOW_DASH_SPEED": (15.0, 'float'),
+              b"SHADOW_DASH_TIME": (0.3, 'float'),
+          }
+          
+          print("=== 字段名字符串位置 ===")
+          for name, (default_val, vtype) in fields.items():
+              pos = data.find(name)
               if pos != -1:
-                  field_positions[field.decode()] = pos
-                  # 字段名后通常紧跟类型信息和默认值
-                  after = data[pos+len(field):pos+len(field)+32]
-                  print(f"  {field.decode()} @ 0x{pos:07X}")
-                  print(f"    后续字节: {after[:16].hex()}")
+                  # 字符串后的结构: 字符串\0 + 类型信息 + 默认值偏移
+                  print(f"\n  {name.decode()} @ 0x{pos:07X}")
+                  # 搜索这个字符串被引用的位置（metadata 中的交叉引用）
+                  # 字符串地址通常会被存储在字段定义中
+                  str_ref = struct.pack('<I', pos)
+                  ref_positions = list(find_all(data, str_ref))
+                  if ref_positions:
+                      print(f"    被 {len(ref_positions)} 处引用:")
+                      for rp in ref_positions[:3]:
+                          ctx = data[max(0,rp-16):rp+20]
+                          print(f"      0x{rp:07X}: {ctx.hex()}")
               else:
-                  print(f"  ❌ {field.decode()} 未找到")
+                  print(f"\n  ❌ {name.decode()} 未找到")
 
-          # ==========================================
-          # 2. 搜索 float 默认值附近的结构
-          # ==========================================
-          print("\n=== 分析 0.5f 位置的上下文 ===")
-          pattern = struct.pack('<f', 0.5)
-          for i, pos in enumerate(find_all(data, pattern)):
-              if i >= 15: break
-              before = data[max(0,pos-16):pos]
-              after = data[pos+4:pos+20]
-              
-              # 检查前面是否有字段名字符串引用
-              print(f"\n  位置 0x{pos:07X}:")
-              print(f"    前16字节: {before.hex()}")
-              print(f"    后16字节: {after.hex()}")
+          # ========== 搜索 0.5f 和 0.4f ==========
+          print("\n=== 0.5f 位置（前 10 个）===")
+          for i, pos in enumerate(find_all(data, struct.pack('<f', 0.5))):
+              if i >= 10: break
+              before = data[max(0,pos-8):pos]
+              after = data[pos+4:pos+12]
+              print(f"  0x{pos:07X}: 前:{before.hex()} 后:{after.hex()}")
 
-          # ==========================================
-          # 3. 搜索 0.4f 位置
-          # ==========================================
-          print("\n=== 搜索 0.4f ===")
-          pattern = struct.pack('<f', 0.4)
-          found_04 = list(find_all(data, pattern))
-          if found_04:
-              for pos in found_04[:5]:
+          print("\n=== 0.4f 位置 ===")
+          found = list(find_all(data, struct.pack('<f', 0.4)))
+          if found:
+              for pos in found[:5]:
                   print(f"  0x{pos:07X}")
           else:
               print("  ❌ 未找到 0.4f")
-
-          # ==========================================
-          # 4. 搜索可能的攻击冷却值 (0.41, 0.45, 0.35等)
-          # ==========================================
-          print("\n=== 搜索接近 0.4 的值 ===")
-          for val in [0.35, 0.41, 0.45, 0.3, 0.25]:
-              pattern = struct.pack('<f', val)
-              count = len(list(find_all(data, pattern)))
-              if count > 0:
-                  print(f"  {val}f: {count} 处")
           PYEOF
 
-      - name: 上传
+      - name: 上传结果
         uses: actions/upload-artifact@v4
         with:
           name: metadata-analysis
-          path: /home/runner/work/**/*.txt
+          path: $(find . -name "analysis.txt" -o -name "*.txt" | head -1)

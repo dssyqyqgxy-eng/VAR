@@ -1,6 +1,7 @@
-name: 搜索 SHADOW_DASH_COOLDOWN 初始化
+name: 反汇编搜索 SHADOW_DASH_COOLDOWN 初始化
 on:
   push:
+
   workflow_dispatch:
 jobs:
   search:
@@ -9,46 +10,44 @@ jobs:
       - uses: actions/checkout@v4
       - name: 解压
         run: unzip -o UnityFramework.zip
-      - name: 搜索 STR 0x80
+      - name: 安装 Capstone
+        run: pip install capstone
+      - name: 反汇编搜索
         run: |
           python3 << 'PYEOF'
+          from capstone import *
           import struct
 
           with open('UnityFramework', 'rb') as f:
               data = f.read()
 
+          md = Cs(CS_ARCH_ARM64, CS_MODE_ARM)
           text_end = 0x021A8000
-          found = []
 
+          print("=== 搜索 STR 到偏移 0x80 的指令 ===\n")
+          count = 0
           for addr in range(0, text_end, 4):
+              if addr + 4 > len(data): break
               insn = struct.unpack('<I', data[addr:addr+4])[0]
-              # STR (immediate) 编码: 11 1110 0100 xxxx xxxx xxxx xxxx xxxx
-              if (insn & 0xFFC00000) == 0x3D000000:
-                  imm = (insn >> 10) & 0xFFF
+              
+              # STR (immediate) float: 0xBD000000
+              # str sX, [xN, #imm]
+              if (insn & 0xFFC00000) == 0xBD000000:
+                  imm = ((insn >> 10) & 0xFFF) << 2  # 浮点 STR 偏移要 x4
                   if imm == 0x80:
-                      found.append((addr, insn))
+                      count += 1
+                      if count <= 30:
+                          # 打印前后指令
+                          code = data[max(0,addr-64):min(len(data),addr+20)]
+                          print(f"--- #{count} @ 0x{addr:08X} ---")
+                          for ins in md.disasm(code, max(0,addr-64)):
+                              marker = " <--" if ins.address == addr else ""
+                              print(f"  0x{ins.address:x}: {ins.mnemonic} {ins.op_str}{marker}")
+                          print()
 
-          print(f"找到 {len(found)} 处 STR 到偏移 0x80\n")
-          for addr, insn in found[:30]:
-              ctx_before = data[max(0,addr-16):addr]
-              ctx_after  = data[addr+4:min(len(data),addr+20)]
-              rt = insn & 0x1F
-              rn = (insn >> 5) & 0x1F
-              print(f"0x{addr:08X}: STR s{rt}, [x{rn}, #0x80]")
-              print(f"  前: {ctx_before.hex()}")
-              print(f"  后: {ctx_after.hex()}")
-
-              # 检查前面是否加载了 0.5f
-              for back in range(addr-4, max(0,addr-64), -4):
-                  prev = struct.unpack('<I', data[back:back+4])[0]
-                  # FMOV sX, #0.5 = 0x1E20100X
-                  if (prev & 0xFFFF0000) == 0x1E200000:
-                      sreg = prev & 0x1F
-                      # 检查后面是否有 FMOV sX, #0.5 对应的 LDR
-                      # 0.5 = 0x3F000000 (float)
-              print()
+          print(f"共找到 {count} 处")
           PYEOF
       - uses: actions/upload-artifact@v4
         with:
-          name: str-0x80-search
+          name: str-0x80
           path: $(find . -name "*.txt" | head -1)

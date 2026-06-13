@@ -1,10 +1,10 @@
-name: 搜索并修改元数据
+name: 精确定位 metadata 偏移
 on:
   push:
 
   workflow_dispatch:
 jobs:
-  patch:
+  analyze:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -12,41 +12,62 @@ jobs:
       - name: 解压
         run: unzip -o script.zip
 
-      - name: 搜索特征值
+      - name: 下载 Il2CppDumper CLI
         run: |
-          mkdir -p output
-          python3 << 'PYEOF' > output/search_result.txt
+          wget -q https://github.com/Perfare/Il2CppDumper/releases/download/v6.7.40/Il2CppDumper-v6.7.40-linux.zip
+          unzip -q Il2CppDumper-v6.7.40-linux.zip
+
+      - name: 分析 metadata
+        run: |
+          # 找 dump.cs 和主二进制
+          DUMP_PATH=$(find . -name "dump.cs" | head -1)
+          echo "dump.cs: $DUMP_PATH"
+          
+          # 从 dump.cs 直接提取字段的 RVA
+          echo ""
+          echo "=== 字段元数据信息 ==="
+          grep -B 5 -A 5 "attack_cooldown\|SHADOW_DASH_COOLDOWN\|hasShadowDash\|canShadowDash" "$DUMP_PATH" | head -50
+
+      - name: 搜索 metadata 结构
+        run: |
+          python3 << 'PYEOF'
           import struct
 
-          def find_all(data, pattern):
-              pos = 0
-              while True:
-                  pos = data.find(pattern, pos)
-                  if pos == -1: break
-                  yield pos
-                  pos += 1
-
           with open('global-metadata.dat', 'rb') as f:
-              data = bytearray(f.read())
+              data = f.read()
 
-          print(f"文件大小: {len(data)} 字节\n")
+          # metadata 文件结构：
+          # 头部: 0xAF1BB1FA (magic) + version
+          # 后面是字符串表、类型定义、字段定义等
 
-          print("=== 所有 0.4f 位置 ===")
-          for i, pos in enumerate(find_all(data, struct.pack('<f', 0.4))):
-              if i >= 15: break
-              ctx = data[max(0,pos-8):pos+12]
-              print(f"  0x{pos:07X}: {ctx.hex()}")
+          # 搜索 "attack_cooldown" 字符串在 metadata 中的位置
+          target_str = b"attack_cooldown"
+          pos = data.find(target_str)
+          if pos != -1:
+              print(f"✅ 'attack_cooldown' 字符串 @ 0x{pos:07X}")
+              print(f"   上下文: {data[pos-16:pos+32].hex()}")
+          else:
+              print("❌ 'attack_cooldown' 字符串未找到")
 
-          print("\n=== 所有 0.5f 位置 ===")
-          for i, pos in enumerate(find_all(data, struct.pack('<f', 0.5))):
-              if i >= 15: break
-              ctx = data[max(0,pos-8):pos+12]
-              print(f"  0x{pos:07X}: {ctx.hex()}")
+          # 搜索 "SHADOW_DASH_COOLDOWN"
+          pos = data.find(b"SHADOW_DASH_COOLDOWN")
+          if pos != -1:
+              print(f"\n✅ 'SHADOW_DASH_COOLDOWN' 字符串 @ 0x{pos:07X}")
+              print(f"   上下文: {data[pos-16:pos+32].hex()}")
+
+          # 搜索 hasShadowDash
+          pos = data.find(b"hasShadowDash")
+          if pos != -1:
+              print(f"\n✅ 'hasShadowDash' 字符串 @ 0x{pos:07X}")
+
+          # 搜索 canShadowDash
+          pos = data.find(b"canShadowDash")
+          if pos != -1:
+              print(f"\n✅ 'canShadowDash' 字符串 @ 0x{pos:07X}")
           PYEOF
-          cat output/search_result.txt
 
-      - name: 上传结果
+      - name: 上传
         uses: actions/upload-artifact@v4
         with:
-          name: search-results
-          path: output/
+          name: metadata-analysis
+          path: $(find . -name "*.txt" | head -1)

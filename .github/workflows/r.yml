@@ -1,36 +1,66 @@
-name: 自动搜索 DATA 段可修改值
+name: Ghidra 自动分析 UnityFramework
 on:
   push:
-
-  workflow_dispatch:
+  
+  workflow_dispatch:  
+    
 jobs:
   analyze:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: 搜索 DATA 段
+
+      - name: 安装 Java
         run: |
-          unzip -o UnityFramework.zip
-          python3 << 'PYEOF'
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq openjdk-17-jdk-headless
+
+      - name: 下载 Ghidra
+        run: |
+          wget -q https://github.com/NationalSecurityAgency/ghidra/releases/download/Ghidra_11.0.3_build/ghidra_11.0.3_PUBLIC_20240410.zip
+          unzip -q ghidra_11.0.3_PUBLIC_20240410.zip
+          echo "✅ Ghidra 已解压"
+
+      - name: 解压 UnityFramework
+        run: unzip -o UnityFramework.zip
+
+      - name: 创建 Ghidra 项目并导入
+        run: |
+          GHIDRA=$(find . -name "ghidra_*" -type d | head -1)
+          
+          $GHIDRA/support/analyzeHeadless \
+            /tmp/ghidra_project \
+            HollowKnight \
+            -import UnityFramework \
+            -overwrite \
+            -postScript ghidra_script.py 2>/dev/null || true
+
+      - name: 运行自定义脚本搜索字段
+        run: |
+          cat > ghidra_script.py << 'PYEOF'
           import struct
+
+          # 搜索 DATA 段中的 0.5f，找到被 ShadowDash 函数引用的那个
+          data_start = 0x021A8000
+          data_end   = 0x023E4000
+
           with open('UnityFramework', 'rb') as f:
               data = f.read()
-          ds, de = 0x021A8000, 0x023E4000
-          seg = data[ds:de]
-          print(f"__DATA: {len(seg)} 字节\n")
-          for val, name in [(0.4, "攻击冷却"), (0.5, "黑冲冷却"), (0.3, "黑冲时间"), (15.0, "黑冲速度")]:
-              p = struct.pack('<f', val)
-              c, pos = 0, 0
-              while True:
-                  pos = seg.find(p, pos)
-                  if pos == -1: break
-                  a = ds + pos
-                  ctx = data[max(0,a-8):min(len(data),a+12)]
-                  print(f"{name} ({val}f) @ 0x{a:08X}: {ctx.hex()}")
-                  c += 1; pos += 4
-              print(f"共 {c} 处\n")
+
+          p05 = struct.pack('<f', 0.5)
+          pos = data_start
+          count = 0
+          while pos < data_end and count < 50:
+              pos = data.find(p05, pos, data_end)
+              if pos == -1: break
+              ctx = data[max(0,pos-16):min(len(data),pos+20)]
+              # 找周围有没有 SHADOW_DASH 字符串引用
+              print(f"0.5f @ 0x{pos:08X}: {ctx.hex()}")
+              count += 1
+              pos += 4
           PYEOF
+
       - uses: actions/upload-artifact@v4
         with:
-          name: data-analysis
-          path: $(find . -name "*.txt" | head -1)
+          name: ghidra-output
+          path: /tmp/ghidra_project

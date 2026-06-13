@@ -1,8 +1,7 @@
 name: objdump 反汇编关键函数
 on:
   push:
-    paths:
-      - 'UnityFramework.zip'
+
   workflow_dispatch:
 jobs:
   analyze:

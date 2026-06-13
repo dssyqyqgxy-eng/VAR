@@ -1,7 +1,8 @@
-name: 精确定位 metadata 字段偏移
+name: 确认函数签名 + 注入时机
 on:
   push:
-
+    paths:
+      - 'script.zip'
   workflow_dispatch:
 jobs:
   analyze:
@@ -12,69 +13,62 @@ jobs:
       - name: 解压
         run: unzip -o script.zip
 
-      - name: 分析 metadata
+      - name: 搜索函数签名
         run: |
-          python3 << 'PYEOF'
-          import struct
-
-          def find_all(data, pattern):
-              pos = 0
-              while True:
-                  pos = data.find(pattern, pos)
-                  if pos == -1: break
-                  yield pos
-                  pos += 1
-
-          with open('global-metadata.dat', 'rb') as f:
-              data = f.read()
-
-          print(f"文件大小: {len(data)} 字节\n")
-
-          # ========== 字段名位置 ==========
-          fields = {
-              b"attack_cooldown": (0.15, 'float'),
-              b"SHADOW_DASH_COOLDOWN": (0.0, 'float'),
-              b"SHADOW_DASH_SPEED": (15.0, 'float'),
-              b"SHADOW_DASH_TIME": (0.3, 'float'),
-          }
+          DUMP=$(find . -name "dump.cs" | head -1)
+          SCRIPT=$(find . -name "script.json" | head -1)
           
-          print("=== 字段名字符串位置 ===")
-          for name, (default_val, vtype) in fields.items():
-              pos = data.find(name)
-              if pos != -1:
-                  # 字符串后的结构: 字符串\0 + 类型信息 + 默认值偏移
-                  print(f"\n  {name.decode()} @ 0x{pos:07X}")
-                  # 搜索这个字符串被引用的位置（metadata 中的交叉引用）
-                  # 字符串地址通常会被存储在字段定义中
-                  str_ref = struct.pack('<I', pos)
-                  ref_positions = list(find_all(data, str_ref))
-                  if ref_positions:
-                      print(f"    被 {len(ref_positions)} 处引用:")
-                      for rp in ref_positions[:3]:
-                          ctx = data[max(0,rp-16):rp+20]
-                          print(f"      0x{rp:07X}: {ctx.hex()}")
-              else:
-                  print(f"\n  ❌ {name.decode()} 未找到")
-
-          # ========== 搜索 0.5f 和 0.4f ==========
-          print("\n=== 0.5f 位置（前 10 个）===")
-          for i, pos in enumerate(find_all(data, struct.pack('<f', 0.5))):
-              if i >= 10: break
-              before = data[max(0,pos-8):pos]
-              after = data[pos+4:pos+12]
-              print(f"  0x{pos:07X}: 前:{before.hex()} 后:{after.hex()}")
-
-          print("\n=== 0.4f 位置 ===")
-          found = list(find_all(data, struct.pack('<f', 0.4)))
-          if found:
-              for pos in found[:5]:
-                  print(f"  0x{pos:07X}")
-          else:
-              print("  ❌ 未找到 0.4f")
-          PYEOF
+          echo "=========================================="
+          echo "  函数签名 & 注入时机分析"
+          echo "=========================================="
+          
+          echo ""
+          echo "========== [1] HeroController.TakeDamage 签名 =========="
+          grep -B 2 -A 8 "void TakeDamage" "$DUMP" | head -40
+          
+          echo ""
+          echo "========== [2] HealthManager.ApplyExtraDamage 签名 =========="
+          grep -B 2 -A 8 "ApplyExtraDamage" "$DUMP" | head -30
+          
+          echo ""
+          echo "========== [3] tk2dSpriteAnimator.Play 签名 =========="
+          grep -A 200 "class tk2dSpriteAnimator" "$DUMP" | grep -B 2 -A 2 "void Play" | head -30
+          
+          echo ""
+          echo "========== [4] HeroController.ShadowDash 签名 =========="
+          grep -B 2 -A 5 "void ShadowDash" "$DUMP" | head -20
+          
+          echo ""
+          echo "========== [5] 注入时机: HeroController 生命周期 =========="
+          grep -E "class HeroController|void Awake|void Start|void Update|void OnEnable" "$DUMP" | head -20
+          
+          echo ""
+          echo "========== [6] 注入时机: UnityAppController =========="
+          grep -B 2 -A 3 "applicationDidBecomeActive\|startUnity\|callbackGfxInited\|runEmbedded" "$DUMP" | head -20
+          
+          echo ""
+          echo "========== [7] script.json: ShadowDash =========="
+          grep -i "ShadowDash\|Shadow_Dash" "$SCRIPT" | head -10
+          
+          echo ""
+          echo "========== [8] script.json: TakeDamage =========="
+          grep -i "HeroController.*TakeDamage\|TakeDamage.*HeroController" "$SCRIPT" | head -10
+          
+          echo ""
+          echo "========== [9] script.json: ApplyExtraDamage =========="
+          grep -i "ApplyExtraDamage" "$SCRIPT" | head -10
+          
+          echo ""
+          echo "========== [10] script.json: Animator.Play =========="
+          grep -i "tk2dSpriteAnimator.*Play" "$SCRIPT" | head -10
+          
+          echo ""
+          echo "=========================================="
+          echo "  分析完成"
+          echo "=========================================="
 
       - name: 上传结果
         uses: actions/upload-artifact@v4
         with:
-          name: metadata-analysis
-          path: $(find . -name "analysis.txt" -o -name "*.txt" | head -1)
+          name: signature-analysis
+          path: $(find . -name "*.txt" -o -name "*.md" | head -1)

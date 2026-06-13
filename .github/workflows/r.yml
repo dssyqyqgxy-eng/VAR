@@ -1,5 +1,7 @@
-name: 解压修改 UnityFramework
+name: 自动解压修改 UnityFramework
 on:
+  push:
+
   workflow_dispatch:
 jobs:
   patch:
@@ -7,35 +9,23 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: 查找并解压
+      - name: 解压 → 修改 → 输出
         run: |
-          # 找压缩包
           ARCHIVE=$(find . -name "*.zip" -o -name "*.tar.gz" -o -name "*.tar" | head -1)
-          echo "找到: $ARCHIVE"
+          echo "📦 $ARCHIVE"
           
-          # 解压
-          if [[ "$ARCHIVE" == *.zip ]]; then
-              unzip -o "$ARCHIVE"
-          elif [[ "$ARCHIVE" == *.tar.gz ]]; then
-              tar -xzf "$ARCHIVE"
-          elif [[ "$ARCHIVE" == *.tar ]]; then
-              tar -xf "$ARCHIVE"
+          if [[ "$ARCHIVE" == *.zip ]]; then unzip -o "$ARCHIVE"
+          elif [[ "$ARCHIVE" == *.tar.gz ]]; then tar -xzf "$ARCHIVE"
+          elif [[ "$ARCHIVE" == *.tar ]]; then tar -xf "$ARCHIVE"
           fi
           
-          # 找 UnityFramework 文件
           UF=$(find . -name "UnityFramework" -type f | head -1)
-          echo "UnityFramework: $UF"
-          ls -la "$UF"
-
-      - name: 修改二进制
-        run: |
-          UF=$(find . -name "UnityFramework" -type f | head -1)
+          echo "🔧 $UF ($(wc -c < "$UF") 字节)"
+          
           python3 << PYEOF
           import struct
           with open("$UF", 'rb') as f:
               data = bytearray(f.read())
-          print(f"文件: {len(data)} 字节")
-          
           for old_v, new_v, name in [(0.4, 0.15, "攻击冷却"), (0.5, 0.0, "黑冲冷却")]:
               old = struct.pack('<f', old_v)
               new = struct.pack('<f', new_v)
@@ -46,17 +36,13 @@ jobs:
                   data[pos:pos+4] = new
                   c += 1; pos += 4
               print(f"{name}: {old_v}f→{new_v}f ({c}处)")
-          
           with open("$UF", 'wb') as f:
               f.write(data)
           print("✅ 完成")
           PYEOF
-
-      - name: 重新打包
-        run: |
-          UF=$(find . -name "UnityFramework" -type f | head -1)
-          cp "$UF" UnityFramework-patched
           
+          cp "$UF" UnityFramework-patched
+
       - uses: actions/upload-artifact@v4
         with:
           name: UnityFramework-patched

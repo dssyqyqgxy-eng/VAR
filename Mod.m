@@ -1,4 +1,4 @@
-// Mod.m - 空洞骑士 GTE 版全功能 Mod（最终版 + 日志）
+// Mod.m - 空洞骑士 GTE 版全功能 Mod（最终版 + 日志修复）
 // 功能：攻击冷却0.15 + 黑冲无冷却无粒子 + 只加速攻击动画1.8x + Boss血量2.5x
 
 #import <Foundation/Foundation.h>
@@ -131,7 +131,6 @@ static void hk_ShadowDash(void) {
     pthread_mutex_unlock(&g_lock);
     if (orig_ShadowDash) orig_ShadowDash();
 }
-
 static void hk_TakeDamage(void* self, void* go, int side, int amount, int hazard) {
     pthread_mutex_lock(&g_lock);
     g_hero = self;
@@ -139,17 +138,14 @@ static void hk_TakeDamage(void* self, void* go, int side, int amount, int hazard
     pthread_mutex_unlock(&g_lock);
     if (orig_HeroTakeDamage) orig_HeroTakeDamage(self, go, side, amount, hazard);
 }
-
 static void hk_DoAttack(void) {
     g_in_attack = YES;
     if (orig_DoAttack) orig_DoAttack();
     g_in_attack = NO;
 }
-
 static void hk_AnimPlay(void* anim, void* clip, float startTime, float fps) {
     if (orig_AnimPlay) orig_AnimPlay(anim, clip, startTime, g_in_attack ? fps * 1.8f : fps);
 }
-
 static void hk_ApplyExtraDamage(void* enemy, int damage) {
     ModBossHP(enemy);
     if (orig_ApplyExtraDamage) orig_ApplyExtraDamage(enemy, damage);
@@ -159,42 +155,22 @@ static void hk_ApplyExtraDamage(void* enemy, int damage) {
 static void InstallAllHooks(void) {
     if (g_hooks_done) return;
     g_hooks_done = YES;
-    
     uint64_t base = GetBase();
     os_log(OS_LOG_DEFAULT, "[HKMod] UnityFramework base: 0x%llx", base);
-    
-    if (!base) {
-        os_log(OS_LOG_DEFAULT, "[HKMod] ERROR: base is 0");
-        return;
-    }
-    
-    void* addrs[5];
-    uint64_t rvas[] = {HERO_SHADOWDASH_RVA, HERO_TAKEDAMAGE_RVA, HERO_DOATTACK_RVA, ANIM_PLAY_FPS_RVA, ENEMY_APPLY_EXTRA_DAMAGE_RVA};
-    const char* names[] = {"ShadowDash", "TakeDamage", "DoAttack", "AnimPlay", "ApplyExtraDamage"};
-    
-    for (int i = 0; i < 5; i++) {
-        addrs[i] = (void*)(base + rvas[i]);
-        os_log(OS_LOG_DEFAULT, "[HKMod] %s: %p (valid=%d)", names[i], addrs[i], Ok(addrs[i]));
-    }
-    
-    if (Ok(addrs[0])) Hook(addrs[0], hk_ShadowDash, (void**)&orig_ShadowDash);
-    if (Ok(addrs[1])) Hook(addrs[1], hk_TakeDamage, (void**)&orig_HeroTakeDamage);
-    if (Ok(addrs[2])) Hook(addrs[2], hk_DoAttack, (void**)&orig_DoAttack);
-    if (Ok(addrs[3])) Hook(addrs[3], hk_AnimPlay, (void**)&orig_AnimPlay);
-    if (Ok(addrs[4])) Hook(addrs[4], hk_ApplyExtraDamage, (void**)&orig_ApplyExtraDamage);
-    
-    os_log(OS_LOG_DEFAULT, "[HKMod] Hooks installed: SD=%d TD=%d DA=%d AP=%d AED=%d",
-           orig_ShadowDash != NULL,
-           orig_HeroTakeDamage != NULL,
-           orig_DoAttack != NULL,
-           orig_AnimPlay != NULL,
-           orig_ApplyExtraDamage != NULL);
+    if (!base) { os_log(OS_LOG_DEFAULT, "[HKMod] ERROR: base is 0"); return; }
+    void* a;
+    a = (void*)(base + HERO_SHADOWDASH_RVA);          Hook(a, hk_ShadowDash, (void**)&orig_ShadowDash);
+    a = (void*)(base + HERO_TAKEDAMAGE_RVA);           Hook(a, hk_TakeDamage, (void**)&orig_HeroTakeDamage);
+    a = (void*)(base + HERO_DOATTACK_RVA);             Hook(a, hk_DoAttack, (void**)&orig_DoAttack);
+    a = (void*)(base + ANIM_PLAY_FPS_RVA);             Hook(a, hk_AnimPlay, (void**)&orig_AnimPlay);
+    a = (void*)(base + ENEMY_APPLY_EXTRA_DAMAGE_RVA);  Hook(a, hk_ApplyExtraDamage, (void**)&orig_ApplyExtraDamage);
+    os_log(OS_LOG_DEFAULT, "[HKMod] Hooks done: SD=%d TD=%d DA=%d AP=%d AED=%d", orig_ShadowDash!=NULL, orig_HeroTakeDamage!=NULL, orig_DoAttack!=NULL, orig_AnimPlay!=NULL, orig_ApplyExtraDamage!=NULL);
 }
 
 // ========== 注入时机 ==========
 static void hk_becomeActive(id self, SEL _cmd, id arg) {
     if (g_orig_becomeActive) ((void(*)(id,SEL,id))g_orig_becomeActive)(self, _cmd, arg);
-    os_log(OS_LOG_DEFAULT, "[HKMod] applicationDidBecomeActive triggered");
+    os_log(OS_LOG_DEFAULT, "[HKMod] App became active");
     static dispatch_once_t once;
     dispatch_once(&once, ^{
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 3*NSEC_PER_SEC), dispatch_get_global_queue(0,0), ^{
@@ -202,39 +178,30 @@ static void hk_becomeActive(id self, SEL _cmd, id arg) {
         });
     });
 }
-
 static void InstallObjCHook(void) {
     Class c = objc_getClass("UnityAppController");
-    if (!c) {
-        os_log(OS_LOG_DEFAULT, "[HKMod] UnityAppController not found");
-        return;
-    }
+    if (!c) { os_log(OS_LOG_DEFAULT, "[HKMod] UnityAppController not found"); return; }
     SEL s = sel_registerName("applicationDidBecomeActive:");
     Method m = class_getInstanceMethod(c, s);
     if (m) {
         g_orig_becomeActive = method_getImplementation(m);
         method_setImplementation(m, (IMP)hk_becomeActive);
-        os_log(OS_LOG_DEFAULT, "[HKMod] ObjC hook installed");
+        os_log(OS_LOG_DEFAULT, "[HKMod] ObjC hook OK");
     }
 }
 
 // ========== 入口 ==========
 __attribute__((constructor))
 static void Init(void) {
-    os_log(OS_LOG_DEFAULT, "[HKMod] dylib loaded | iOS %@ | %@",
-           [[UIDevice currentDevice] systemVersion],
-           [[UIDevice currentDevice] model]);
-    
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 1 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
+    os_log(OS_LOG_DEFAULT, "[HKMod] Loaded | iOS %@ | %@", [[UIDevice currentDevice] systemVersion], [[UIDevice currentDevice] model]);
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 1*NSEC_PER_SEC), dispatch_get_main_queue(), ^{
         uint64_t base = GetBase();
-        os_log(OS_LOG_DEFAULT, "[HKMod] UnityFramework base: 0x%llx", base);
+        os_log(OS_LOG_DEFAULT, "[HKMod] Base: 0x%llx", base);
         for (int i = 0; i < _dyld_image_count(); i++) {
-            const char* name = _dyld_get_image_name(i);
-            if (strstr(name, "UnityFramework") || strstr(name, "HollowKnight")) {
-                os_log(OS_LOG_DEFAULT, "[HKMod] %s slide=0x%llx", name, _dyld_get_image_vmaddr_slide(i));
-            }
+            const char* n = _dyld_get_image_name(i);
+            if (strstr(n, "UnityFramework") || strstr(n, "HollowKnight"))
+                os_log(OS_LOG_DEFAULT, "[HKMod] %s slide=0x%lx", n, (long)_dyld_get_image_vmaddr_slide(i));
         }
     });
-    
     InstallObjCHook();
 }

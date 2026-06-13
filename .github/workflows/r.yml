@@ -1,8 +1,7 @@
 name: 确认函数签名 + 注入时机
 on:
   push:
-    paths:
-      - 'script.zip'
+
   workflow_dispatch:
 jobs:
   analyze:

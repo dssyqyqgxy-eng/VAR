@@ -1,4 +1,4 @@
-name: 搜索并修改元数据
+name: 搜索所有特征值并修改
 on:
   push:
 
@@ -12,63 +12,41 @@ jobs:
       - name: 解压
         run: unzip -o script.zip
 
-      - name: 搜索特征值
+      - name: 搜索并修改
         run: |
           python3 << 'PYEOF'
-          import struct, glob
+          import struct
 
-          dump_path = glob.glob("**/dump.cs", recursive=True)[0]
-          print(f"📂 dump.cs: {dump_path}")
-
-          print("\n=== 字段类内偏移 ===")
-          with open(dump_path, 'r', encoding='utf-8', errors='ignore') as f:
-              for line in f:
-                  if "// 0x" in line:
-                      for key in ["attack_cooldown", "SHADOW_DASH_COOLDOWN", "hasShadowDash", "canShadowDash", "hp"]:
-                          if key in line:
-                              print(f"  {line.strip()}")
-
-          print("\n=== 搜索 float 默认值 ===")
-          with open('global-metadata.dat', 'rb') as f:
-              data = f.read()
-
-          for val, name in [(0.4, "攻击冷却"), (0.5, "黑冲冷却")]:
-              pattern = struct.pack('<f', val)
-              pos, count = 0, 0
-              while count < 10:
+          def find_all(data, pattern):
+              pos = 0
+              while True:
                   pos = data.find(pattern, pos)
                   if pos == -1: break
-                  print(f"  {name} ({val}f) @ 0x{pos:07X}")
+                  yield pos
                   pos += 1
-                  count += 1
 
-          print("\n=== 搜索 bool 默认值 ===")
-          # hasShadowDash/canShadowDash 默认 false = 0x00
-          # 搜索连续的 0x00 0x00 0x00 0x00 附近有字段标志
-          print("  bool 字段默认 false，需手动确认偏移")
-          PYEOF
-
-      - name: 保存结果
-        run: |
-          mkdir -p output
-          python3 << 'PYEOF' > output/search_result.txt
-          import struct, glob
-          dump_path = glob.glob("**/dump.cs", recursive=True)[0]
-          with open(dump_path) as f:
-              for line in f:
-                  if "// 0x" in line and any(k in line for k in ["attack_cooldown", "SHADOW_DASH", "hasShadowDash", "canShadowDash", "hp"]):
-                      print(line.strip())
           with open('global-metadata.dat', 'rb') as f:
-              data = f.read()
-          for val, name in [(0.4, "攻击冷却"), (0.5, "黑冲冷却")]:
-              p = struct.pack('<f', val)
-              for i, pos in enumerate([data.find(p)]):
-                  if pos != -1:
-                      print(f"{name} ({val}f) @ 0x{pos:07X}")
+              data = bytearray(f.read())
+
+          print(f"文件大小: {len(data)} 字节\n")
+
+          # 列出所有 0.4f
+          print("=== 所有 0.4f 位置 ===")
+          for i, pos in enumerate(find_all(data, struct.pack('<f', 0.4))):
+              if i >= 15: break
+              context = data[max(0,pos-8):pos+12]
+              print(f"  0x{pos:07X}: {context.hex()}")
+
+          # 列出所有 0.5f
+          print("\n=== 所有 0.5f 位置 ===")
+          for i, pos in enumerate(find_all(data, struct.pack('<f', 0.5))):
+              if i >= 15: break
+              context = data[max(0,pos-8):pos+12]
+              print(f"  0x{pos:07X}: {context.hex()}")
           PYEOF
 
-      - name: 上传结果
+      - name: 上传
         uses: actions/upload-artifact@v4
         with:
           name: search-results
-          path: output/
+          path: $(find . -name "*.txt" -o -name "*.dat" | head -1)

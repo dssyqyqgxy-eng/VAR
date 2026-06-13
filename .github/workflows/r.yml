@@ -1,4 +1,4 @@
-name: 编译 Mod + 精确修改黑冲冷却元数据
+name: 编译 Mod + 精确修改黑冲冷却
 on:
   push:
 
@@ -16,101 +16,68 @@ jobs:
           clang -arch arm64 -miphoneos-version-min=12.0 -isysroot "$SDK_PATH" \
             -dynamiclib -framework Foundation -framework UIKit \
             -o Mod.dylib Mod.m -Wno-everything
-          echo "✅ 编译完成"
+          codesign -f -s - Mod.dylib 2>/dev/null || true
+          echo "✅ Mod.dylib 编译完成"
 
-      - name: 签名 Mod.dylib
-        run: |
-          codesign -f -s - Mod.dylib 2>/dev/null || echo "⚠️ 签名跳过"
-          echo "✅ 签名完成"
-
-      # ========== 2. 精确定位并修改 metadata ==========
-      - name: 解压 script.zip
-        run: unzip -o script.zip
-
-      - name: 精确定位黑冲冷却默认值
+      # ========== 2. 精确修改黑冲冷却 ==========
+      - name: 修改元数据
         run: |
           python3 << 'PYEOF'
-          import struct, glob, json
+          import struct
 
-          # 找到字段名字符串在 metadata 中的位置
           with open('global-metadata.dat', 'rb') as f:
               data = bytearray(f.read())
 
-          # 找到 "SHADOW_DASH_COOLDOWN" 字符串
-          cooldown_str_pos = data.find(b"SHADOW_DASH_COOLDOWN")
-          if cooldown_str_pos == -1:
-              print("❌ 未找到 SHADOW_DASH_COOLDOWN 字符串")
+          str_pos = data.find(b"SHADOW_DASH_COOLDOWN")
+          if str_pos == -1:
+              print("❌ 未找到字符串")
               exit(1)
-          print(f"✅ SHADOW_DASH_COOLDOWN 字符串 @ 0x{cooldown_str_pos:07X}")
 
-          # 搜索所有引用这个字符串地址的位置
-          str_ref = struct.pack('<I', cooldown_str_pos)
-          ref_positions = []
-          pos = 0
-          while True:
-              pos = data.find(str_ref, pos)
-              if pos == -1: break
-              ref_positions.append(pos)
-              pos += 1
-          print(f"   被 {len(ref_positions)} 处引用: {[hex(p) for p in ref_positions[:5]]}")
+          print(f"字符串 @ 0x{str_pos:07X}")
 
-          # 在每个引用附近搜索 0.5f (0x0000003F)
-          print("\n=== 精确定位黑冲冷却的 0.5f ===")
+          pattern = struct.pack('<f', 0.5)
           found = False
-          for ref_pos in ref_positions:
-              # 在引用位置前后 64 字节搜索 0.5f
-              start = max(0, ref_pos - 64)
-              end = min(len(data), ref_pos + 64)
-              region = data[start:end]
-              pattern = struct.pack('<f', 0.5)
-              p = region.find(pattern)
-              if p != -1:
-                  actual_pos = start + p
-                  # 验证：检查这个位置前面的字节模式
-                  ctx_before = data[max(0, actual_pos-16):actual_pos]
-                  ctx_after = data[actual_pos+4:min(len(data), actual_pos+20)]
-                  print(f"✅ 找到: 0x{actual_pos:07X}")
-                  print(f"   前: {ctx_before.hex()}")
-                  print(f"   后: {ctx_after.hex()}")
-                  
-                  # 修改
-                  new_val = struct.pack('<f', 0.0)
-                  data[actual_pos:actual_pos+4] = new_val
-                  print(f"   ✅ 已修改为 0.0f")
-                  found = True
-                  break
 
-          if not found:
-              print("❌ 未找到黑冲冷却的 0.5f，回退到全局搜索...")
-              pattern = struct.pack('<f', 0.5)
-              pos = 0
-              while True:
-                  pos = data.find(pattern, pos)
+          for search_start in [max(0, str_pos - 512), str_pos]:
+              search_end = min(len(data), search_start + 1024)
+              pos = search_start
+              while pos < search_end:
+                  pos = data.find(pattern, pos, search_end)
                   if pos == -1: break
-                  # 检查这个位置附近是否有 SHADOW_DASH_COOLDOWN 引用
-                  nearby = data[max(0,pos-64):min(len(data),pos+64)]
-                  if b"SHADOW_DASH" in nearby or b"cooldown" in nearby.lower():
-                      print(f"✅ 关联找到: 0x{pos:07X}")
+                  dist = pos - str_pos
+                  ctx = data[max(0,pos-16):min(len(data),pos+16)]
+                  print(f"  候选 0x{pos:07X} (距 {dist:+d}): {ctx.hex()}")
+                  if abs(dist) < 300 and not found:
                       data[pos:pos+4] = struct.pack('<f', 0.0)
+                      print(f"  ✅ 已修改")
                       found = True
                   pos += 1
 
-          if found:
-              with open('global-metadata.dat', 'wb') as f:
-                  f.write(data)
-              print("\n✅ 元数据修改完成")
-          else:
-              print("\n⚠️ 未修改任何值")
+          if not found:
+              print("⚠️ 未找到精确位置，回退全局修改")
+              pos = 0
+              count = 0
+              while True:
+                  pos = data.find(pattern, pos)
+                  if pos == -1: break
+                  data[pos:pos+4] = struct.pack('<f', 0.0)
+                  count += 1
+                  pos += 4
+              print(f"  全局修改 {count} 处")
+
+          with open('global-metadata.dat', 'wb') as f:
+              f.write(data)
+          print("✅ 元数据修改完成")
           PYEOF
 
-      # ========== 3. 上传产物 ==========
+      # ========== 3. 上传 ==========
       - name: 上传 Mod.dylib
         uses: actions/upload-artifact@v4
         with:
           name: Mod.dylib
           path: Mod.dylib
 
-      - name: 上传修改后的元数据
+      - name: 上传元数据
         uses: actions/upload-artifact@v4
         with:
           name: global-metadata-patched

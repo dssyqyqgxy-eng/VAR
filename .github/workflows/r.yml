@@ -1,56 +1,58 @@
-name: 自动修改 UnityFramework
+name: 解析 UnityFramework 段信息
 on:
   push:
   workflow_dispatch:
 jobs:
-  patch:
+  analyze:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      - name: 解压并修改
+      - name: 解压并解析
         run: |
-          echo "=== 所有 zip ==="
-          find . -name "*.zip" -ls
-          
-          # 只解压 UnityFramework.zip
           unzip -o UnityFramework.zip
           
-          # 找 UnityFramework 文件
-          UF=$(find . -name "UnityFramework" -type f | head -1)
-          echo "文件: $UF ($(wc -c < "$UF") 字节)"
-          
-          # 修改
           python3 << 'PYEOF'
-          import struct, subprocess, glob
-          
-          # 找文件
-          candidates = glob.glob("**/UnityFramework", recursive=True)
-          uf = candidates[0]
-          print(f"修改: {uf}")
-          
-          with open(uf, 'rb') as f:
-              data = bytearray(f.read())
-          
-          for old_v, new_v, name in [(0.4, 0.15, "攻击冷却"), (0.5, 0.0, "黑冲冷却")]:
-              old = struct.pack('<f', old_v)
-              new = struct.pack('<f', new_v)
-              c, pos = 0, 0
-              while True:
-                  pos = data.find(old, pos)
-                  if pos == -1: break
-                  data[pos:pos+4] = new
-                  c += 1; pos += 4
-              print(f"{name}: {old_v}f -> {new_v}f ({c}处)")
-          
-          with open(uf, 'wb') as f:
-              f.write(data)
-          print("✅ 完成")
+          import struct
+
+          with open('UnityFramework', 'rb') as f:
+              data = f.read()
+
+          magic = struct.unpack('<I', data[0:4])[0]
+          print(f"Magic: 0x{magic:08X}")
+
+          ncmds = struct.unpack('<I', data[16:20])[0]
+          print(f"Load commands: {ncmds}\n")
+
+          offset = 32
+          for i in range(ncmds):
+              cmd = struct.unpack('<I', data[offset:offset+4])[0]
+              cmdsize = struct.unpack('<I', data[offset+4:offset+8])[0]
+              
+              if cmd == 0x19:
+                  segname = data[offset+8:offset+24].decode('utf-8').strip('\x00')
+                  vmaddr = struct.unpack('<Q', data[offset+24:offset+32])[0]
+                  vmsize = struct.unpack('<Q', data[offset+32:offset+40])[0]
+                  fileoff = struct.unpack('<Q', data[offset+40:offset+48])[0]
+                  filesize = struct.unpack('<Q', data[offset+48:offset+56])[0]
+                  
+                  print(f"{segname:20s} VM: 0x{vmaddr:09X}-0x{vmaddr+vmsize:09X} 文件: 0x{fileoff:08X}-0x{fileoff+filesize:08X}")
+              offset += cmdsize
+
+          # 验证 RVA
+          print("\n=== RVA 是否在 __TEXT 段内 ===")
+          rvas = {
+              "TakeDamage": 0x102614C,
+              "ShadowDash": 0x102D4DC,
+              "DoAttack": 0x102FF1C,
+              "AnimPlay": 0x1314A7C,
+              "ApplyExtraDamage": 0x1022A58,
+          }
+          for name, rva in rvas.items():
+              print(f"  {name}: 0x{rva:X}")
           PYEOF
-          
-          cp "$UF" UnityFramework-patched
 
       - uses: actions/upload-artifact@v4
         with:
-          name: UnityFramework-patched
-          path: UnityFramework-patched
+          name: segment-analysis
+          path: $(find . -name "*.txt" | head -1)

@@ -1,40 +1,56 @@
-name: Capstone 反汇编
+name: 搜索 SHADOW_DASH_COOLDOWN 初始化
 on:
   push:
+    paths:
+      - 'UnityFramework.zip'
   workflow_dispatch:
 jobs:
-  disasm:
+  search:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - name: 解压
         run: unzip -o UnityFramework.zip
-      - name: 安装 Capstone
-        run: pip install capstone
-      - name: 反汇编
+      - name: 搜索 STR 0x80
         run: |
           python3 << 'PYEOF'
-          from capstone import *
+          import struct
 
           with open('UnityFramework', 'rb') as f:
               data = f.read()
 
-          md = Cs(CS_ARCH_ARM64, CS_MODE_ARM)
-          md.detail = True
+          text_end = 0x021A8000
+          found = []
 
-          def disasm(name, addr, size=0x80):
-              print(f"\n=== {name} ({hex(addr)}) ===")
-              code = data[addr:addr+size]
-              for insn in md.disasm(code, addr):
-                  print(f"  0x{insn.address:x}: {insn.mnemonic} {insn.op_str}")
+          for addr in range(0, text_end, 4):
+              insn = struct.unpack('<I', data[addr:addr+4])[0]
+              # STR (immediate) 编码: 11 1110 0100 xxxx xxxx xxxx xxxx xxxx
+              if (insn & 0xFFC00000) == 0x3D000000:
+                  imm = (insn >> 10) & 0xFFF
+                  if imm == 0x80:
+                      found.append((addr, insn))
 
-          disasm("ShadowDash",       0x102D4DC)
-          disasm("TakeDamage",       0x102614C, 0xC0)
-          disasm("ApplyExtraDamage", 0x1022A58)
-          disasm("DoAttack",         0x102FF1C)
-          disasm("AnimPlay",         0x1314A7C)
+          print(f"找到 {len(found)} 处 STR 到偏移 0x80\n")
+          for addr, insn in found[:30]:
+              ctx_before = data[max(0,addr-16):addr]
+              ctx_after  = data[addr+4:min(len(data),addr+20)]
+              rt = insn & 0x1F
+              rn = (insn >> 5) & 0x1F
+              print(f"0x{addr:08X}: STR s{rt}, [x{rn}, #0x80]")
+              print(f"  前: {ctx_before.hex()}")
+              print(f"  后: {ctx_after.hex()}")
+
+              # 检查前面是否加载了 0.5f
+              for back in range(addr-4, max(0,addr-64), -4):
+                  prev = struct.unpack('<I', data[back:back+4])[0]
+                  # FMOV sX, #0.5 = 0x1E20100X
+                  if (prev & 0xFFFF0000) == 0x1E200000:
+                      sreg = prev & 0x1F
+                      # 检查后面是否有 FMOV sX, #0.5 对应的 LDR
+                      # 0.5 = 0x3F000000 (float)
+              print()
           PYEOF
       - uses: actions/upload-artifact@v4
         with:
-          name: capstone-disasm
+          name: str-0x80-search
           path: $(find . -name "*.txt" | head -1)

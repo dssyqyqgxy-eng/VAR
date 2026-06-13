@@ -1,4 +1,4 @@
-name: 确认函数签名 + 注入时机
+name: 搜索攻击动画判断 + Boss血量 RVA
 on:
   push:
 
@@ -12,62 +12,36 @@ jobs:
       - name: 解压
         run: unzip -o script.zip
 
-      - name: 搜索函数签名
+      - name: 搜索
         run: |
           DUMP=$(find . -name "dump.cs" | head -1)
           SCRIPT=$(find . -name "script.json" | head -1)
           
-          echo "=========================================="
-          echo "  函数签名 & 注入时机分析"
-          echo "=========================================="
+          echo "=== [1] tk2dSpriteAnimationClip.name 字段 ==="
+          grep -A 30 "class tk2dSpriteAnimationClip" "$DUMP" | grep -E "name|Name|string" | head -10
           
           echo ""
-          echo "========== [1] HeroController.TakeDamage 签名 =========="
-          grep -B 2 -A 8 "void TakeDamage" "$DUMP" | head -40
+          echo "=== [2] HealthManager.ApplyExtraDamage RVA ==="
+          grep -B 2 "HealthManager.*ApplyExtraDamage\|ApplyExtraDamage.*HealthManager" "$DUMP" | grep "RVA:" | head -5
           
           echo ""
-          echo "========== [2] HealthManager.ApplyExtraDamage 签名 =========="
-          grep -B 2 -A 8 "ApplyExtraDamage" "$DUMP" | head -30
+          echo "=== [3] script.json: HealthManager.ApplyExtraDamage ==="
+          grep -i "HealthManager.*ApplyExtraDamage" "$SCRIPT" | head -5
           
           echo ""
-          echo "========== [3] tk2dSpriteAnimator.Play 签名 =========="
-          grep -A 200 "class tk2dSpriteAnimator" "$DUMP" | grep -B 2 -A 2 "void Play" | head -30
+          echo "=== [4] script.json: tk2dSpriteAnimationClip.name ==="
+          grep -i "tk2dSpriteAnimationClip.*name\|tk2dSpriteAnimationClip.*Name" "$SCRIPT" | head -5
           
           echo ""
-          echo "========== [4] HeroController.ShadowDash 签名 =========="
-          grep -B 2 -A 5 "void ShadowDash" "$DUMP" | head -20
+          echo "=== [5] HeroController.Attack 方法 ==="
+          grep -B 2 "void Attack\|private void Attack\|public void Attack" "$DUMP" | grep "RVA:" | head -10
           
           echo ""
-          echo "========== [5] 注入时机: HeroController 生命周期 =========="
-          grep -E "class HeroController|void Awake|void Start|void Update|void OnEnable" "$DUMP" | head -20
-          
-          echo ""
-          echo "========== [6] 注入时机: UnityAppController =========="
-          grep -B 2 -A 3 "applicationDidBecomeActive\|startUnity\|callbackGfxInited\|runEmbedded" "$DUMP" | head -20
-          
-          echo ""
-          echo "========== [7] script.json: ShadowDash =========="
-          grep -i "ShadowDash\|Shadow_Dash" "$SCRIPT" | head -10
-          
-          echo ""
-          echo "========== [8] script.json: TakeDamage =========="
-          grep -i "HeroController.*TakeDamage\|TakeDamage.*HeroController" "$SCRIPT" | head -10
-          
-          echo ""
-          echo "========== [9] script.json: ApplyExtraDamage =========="
-          grep -i "ApplyExtraDamage" "$SCRIPT" | head -10
-          
-          echo ""
-          echo "========== [10] script.json: Animator.Play =========="
-          grep -i "tk2dSpriteAnimator.*Play" "$SCRIPT" | head -10
-          
-          echo ""
-          echo "=========================================="
-          echo "  分析完成"
-          echo "=========================================="
+          echo "=== [6] script.json: HeroController.Attack ==="
+          grep -i "HeroController.*Attack" "$SCRIPT" | grep -v "AttackCooldown\|AttackSpeed\|AttackPower" | head -10
 
-      - name: 上传结果
+      - name: 上传
         uses: actions/upload-artifact@v4
         with:
-          name: signature-analysis
+          name: boss-and-attack-rva
           path: $(find . -name "*.txt" -o -name "*.md" | head -1)

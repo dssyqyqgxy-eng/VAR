@@ -1,52 +1,28 @@
-name: 提取 HealthManager.ApplyExtraDamage Address
+name: 搜索黑冲粒子特效字段偏移
 on:
   push:
+
   workflow_dispatch:
 jobs:
   analyze:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
       - name: 解压
         run: unzip -o script.zip
-
-      - name: 提取 Address
+      - name: 搜索
         run: |
-          SCRIPT=$(find . -name "script.json" | head -1)
-          
-          python3 << 'PYEOF'
-          import json, glob
-
-          script_path = glob.glob("**/script.json", recursive=True)[0]
-
-          with open(script_path, 'r', encoding='utf-8', errors='ignore') as f:
-              data = json.load(f)
-
-          targets = [
-              "HealthManager$$ApplyExtraDamage",
-              "HeroController$$DoAttack",
-              "HeroController$$Attack",
-              "HeroController$$ShadowDash",
-              "HeroController$$TakeDamage",
-              "tk2dSpriteAnimator$$Play",
-          ]
-
-          print("=== 精确 Address ===")
-          if 'ScriptMethod' in data:
-              for item in data['ScriptMethod']:
-                  name = item.get('Name', '')
-                  for target in targets:
-                      if name == target:
-                          addr = item.get('Address', 0)
-                          sig = item.get('Signature', '')
-                          print(f"\n{name}")
-                          print(f"  Address: 0x{addr:X}")
-                          print(f"  Signature: {sig}")
-          PYEOF
-
+          DUMP=$(find . -name "dump.cs" | head -1)
+          echo "=== 黑冲粒子/Burst 字段 ==="
+          grep -n "shadowdash\|shadow_dash\|shadowDash" "$DUMP" | grep -iE "burst|particle|prefab|effect|vfx" | head -20
+          echo ""
+          echo "=== ShadowDash 函数完整代码 ==="
+          grep -A 50 "private void ShadowDash" "$DUMP" | head -60
+          echo ""
+          echo "=== HeroController 中所有 shadow 相关字段 ==="
+          grep -n "shadow\|Shadow" "$DUMP" | grep "0x" | head -30
       - name: 上传
         uses: actions/upload-artifact@v4
         with:
-          name: final-addresses
-          path: $(find . -name "*.txt" -o -name "*.md" | head -1)
+          name: shadow-particles
+          path: $(find . -name "*.txt" | head -1)

@@ -1,7 +1,6 @@
-name: 搜索 DoAttack RVA + 完整签名确认
+name: 提取 HealthManager.ApplyExtraDamage Address
 on:
   push:
-
   workflow_dispatch:
 jobs:
   analyze:
@@ -12,36 +11,42 @@ jobs:
       - name: 解压
         run: unzip -o script.zip
 
-      - name: 搜索
+      - name: 提取 Address
         run: |
-          DUMP=$(find . -name "dump.cs" | head -1)
           SCRIPT=$(find . -name "script.json" | head -1)
           
-          echo "=== [1] DoAttack RVA ==="
-          grep -B 2 -A 5 "DoAttack" "$DUMP" | grep -E "RVA:|void DoAttack" | head -10
-          
-          echo ""
-          echo "=== [2] script.json: DoAttack ==="
-          grep -i "DoAttack" "$SCRIPT" | head -5
-          
-          echo ""
-          echo "=== [3] HealthManager.ApplyExtraDamage RVA ==="
-          grep -B 2 "HealthManager.*ApplyExtraDamage" "$DUMP" | grep "RVA:" | head -5
-          
-          echo ""
-          echo "=== [4] script.json: HealthManager.ApplyExtraDamage ==="
-          grep "HealthManager.*ApplyExtraDamage" "$SCRIPT" | head -3
-          
-          echo ""
-          echo "=== [5] 注入时机: UnityAppController ==="
-          grep -i "UnityAppController\|applicationDidBecomeActive\|startUnity\|callbackGfxInited" "$DUMP" | head -10
-          
-          echo ""
-          echo "=== [6] 注入时机: script.json Unity 启动 ==="
-          grep -i "startUnity\|callbackGfxInited\|UnityAppController" "$SCRIPT" | head -10
+          python3 << 'PYEOF'
+          import json, glob
+
+          script_path = glob.glob("**/script.json", recursive=True)[0]
+
+          with open(script_path, 'r', encoding='utf-8', errors='ignore') as f:
+              data = json.load(f)
+
+          targets = [
+              "HealthManager$$ApplyExtraDamage",
+              "HeroController$$DoAttack",
+              "HeroController$$Attack",
+              "HeroController$$ShadowDash",
+              "HeroController$$TakeDamage",
+              "tk2dSpriteAnimator$$Play",
+          ]
+
+          print("=== 精确 Address ===")
+          if 'ScriptMethod' in data:
+              for item in data['ScriptMethod']:
+                  name = item.get('Name', '')
+                  for target in targets:
+                      if name == target:
+                          addr = item.get('Address', 0)
+                          sig = item.get('Signature', '')
+                          print(f"\n{name}")
+                          print(f"  Address: 0x{addr:X}")
+                          print(f"  Signature: {sig}")
+          PYEOF
 
       - name: 上传
         uses: actions/upload-artifact@v4
         with:
-          name: final-rva
+          name: final-addresses
           path: $(find . -name "*.txt" -o -name "*.md" | head -1)

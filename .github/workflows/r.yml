@@ -1,36 +1,40 @@
-name: objdump 反汇编关键函数
+name: Capstone 反汇编
 on:
   push:
-
   workflow_dispatch:
 jobs:
-  analyze:
+  disasm:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: 安装工具
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq binutils-aarch64-linux-gnu
       - name: 解压
         run: unzip -o UnityFramework.zip
+      - name: 安装 Capstone
+        run: pip install capstone
       - name: 反汇编
         run: |
-          echo "=== ShadowDash (0x102D4DC) ==="
-          aarch64-linux-gnu-objdump -d --start-address=0x102D4DC --stop-address=0x102D550 UnityFramework 2>/dev/null
-          echo ""
-          echo "=== TakeDamage (0x102614C) ==="
-          aarch64-linux-gnu-objdump -d --start-address=0x102614C --stop-address=0x10261C0 UnityFramework 2>/dev/null
-          echo ""
-          echo "=== ApplyExtraDamage (0x1022A58) ==="
-          aarch64-linux-gnu-objdump -d --start-address=0x1022A58 --stop-address=0x1022AD0 UnityFramework 2>/dev/null
-          echo ""
-          echo "=== DoAttack (0x102FF1C) ==="
-          aarch64-linux-gnu-objdump -d --start-address=0x102FF1C --stop-address=0x102FF80 UnityFramework 2>/dev/null
-          echo ""
-          echo "=== AnimPlay (0x1314A7C) ==="
-          aarch64-linux-gnu-objdump -d --start-address=0x1314A7C --stop-address=0x1314AE0 UnityFramework 2>/dev/null
+          python3 << 'PYEOF'
+          from capstone import *
+
+          with open('UnityFramework', 'rb') as f:
+              data = f.read()
+
+          md = Cs(CS_ARCH_ARM64, CS_MODE_ARM)
+          md.detail = True
+
+          def disasm(name, addr, size=0x80):
+              print(f"\n=== {name} ({hex(addr)}) ===")
+              code = data[addr:addr+size]
+              for insn in md.disasm(code, addr):
+                  print(f"  0x{insn.address:x}: {insn.mnemonic} {insn.op_str}")
+
+          disasm("ShadowDash",       0x102D4DC)
+          disasm("TakeDamage",       0x102614C, 0xC0)
+          disasm("ApplyExtraDamage", 0x1022A58)
+          disasm("DoAttack",         0x102FF1C)
+          disasm("AnimPlay",         0x1314A7C)
+          PYEOF
       - uses: actions/upload-artifact@v4
         with:
-          name: disasm-output
+          name: capstone-disasm
           path: $(find . -name "*.txt" | head -1)

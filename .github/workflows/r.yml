@@ -1,4 +1,4 @@
-name: 精确定位 metadata 偏移
+name: 精确定位 metadata 字段偏移
 on:
   push:
 
@@ -12,23 +12,7 @@ jobs:
       - name: 解压
         run: unzip -o script.zip
 
-      - name: 下载 Il2CppDumper CLI
-        run: |
-          wget -q https://github.com/Perfare/Il2CppDumper/releases/download/v6.7.40/Il2CppDumper-v6.7.40-linux.zip
-          unzip -q Il2CppDumper-v6.7.40-linux.zip
-
-      - name: 分析 metadata
-        run: |
-          # 找 dump.cs 和主二进制
-          DUMP_PATH=$(find . -name "dump.cs" | head -1)
-          echo "dump.cs: $DUMP_PATH"
-          
-          # 从 dump.cs 直接提取字段的 RVA
-          echo ""
-          echo "=== 字段元数据信息 ==="
-          grep -B 5 -A 5 "attack_cooldown\|SHADOW_DASH_COOLDOWN\|hasShadowDash\|canShadowDash" "$DUMP_PATH" | head -50
-
-      - name: 搜索 metadata 结构
+      - name: 精确定位字段默认值
         run: |
           python3 << 'PYEOF'
           import struct
@@ -36,38 +20,74 @@ jobs:
           with open('global-metadata.dat', 'rb') as f:
               data = f.read()
 
-          # metadata 文件结构：
-          # 头部: 0xAF1BB1FA (magic) + version
-          # 后面是字符串表、类型定义、字段定义等
+          print(f"文件大小: {len(data)} 字节")
+          print(f"Magic: {data[:4].hex()}")
 
-          # 搜索 "attack_cooldown" 字符串在 metadata 中的位置
-          target_str = b"attack_cooldown"
-          pos = data.find(target_str)
-          if pos != -1:
-              print(f"✅ 'attack_cooldown' 字符串 @ 0x{pos:07X}")
-              print(f"   上下文: {data[pos-16:pos+32].hex()}")
+          # ==========================================
+          # 1. 搜索字段名字符串
+          # ==========================================
+          fields = [
+              b"attack_cooldown",
+              b"SHADOW_DASH_COOLDOWN",
+              b"hasShadowDash",
+              b"canShadowDash",
+              b"SHADOW_DASH_SPEED",
+              b"SHADOW_DASH_TIME",
+          ]
+
+          print("\n=== 字段名在 metadata 中的位置 ===")
+          field_positions = {}
+          for field in fields:
+              pos = data.find(field)
+              if pos != -1:
+                  field_positions[field.decode()] = pos
+                  # 字段名后通常紧跟类型信息和默认值
+                  after = data[pos+len(field):pos+len(field)+32]
+                  print(f"  {field.decode()} @ 0x{pos:07X}")
+                  print(f"    后续字节: {after[:16].hex()}")
+              else:
+                  print(f"  ❌ {field.decode()} 未找到")
+
+          # ==========================================
+          # 2. 搜索 float 默认值附近的结构
+          # ==========================================
+          print("\n=== 分析 0.5f 位置的上下文 ===")
+          pattern = struct.pack('<f', 0.5)
+          for i, pos in enumerate(find_all(data, pattern)):
+              if i >= 15: break
+              before = data[max(0,pos-16):pos]
+              after = data[pos+4:pos+20]
+              
+              # 检查前面是否有字段名字符串引用
+              print(f"\n  位置 0x{pos:07X}:")
+              print(f"    前16字节: {before.hex()}")
+              print(f"    后16字节: {after.hex()}")
+
+          # ==========================================
+          # 3. 搜索 0.4f 位置
+          # ==========================================
+          print("\n=== 搜索 0.4f ===")
+          pattern = struct.pack('<f', 0.4)
+          found_04 = list(find_all(data, pattern))
+          if found_04:
+              for pos in found_04[:5]:
+                  print(f"  0x{pos:07X}")
           else:
-              print("❌ 'attack_cooldown' 字符串未找到")
+              print("  ❌ 未找到 0.4f")
 
-          # 搜索 "SHADOW_DASH_COOLDOWN"
-          pos = data.find(b"SHADOW_DASH_COOLDOWN")
-          if pos != -1:
-              print(f"\n✅ 'SHADOW_DASH_COOLDOWN' 字符串 @ 0x{pos:07X}")
-              print(f"   上下文: {data[pos-16:pos+32].hex()}")
-
-          # 搜索 hasShadowDash
-          pos = data.find(b"hasShadowDash")
-          if pos != -1:
-              print(f"\n✅ 'hasShadowDash' 字符串 @ 0x{pos:07X}")
-
-          # 搜索 canShadowDash
-          pos = data.find(b"canShadowDash")
-          if pos != -1:
-              print(f"\n✅ 'canShadowDash' 字符串 @ 0x{pos:07X}")
+          # ==========================================
+          # 4. 搜索可能的攻击冷却值 (0.41, 0.45, 0.35等)
+          # ==========================================
+          print("\n=== 搜索接近 0.4 的值 ===")
+          for val in [0.35, 0.41, 0.45, 0.3, 0.25]:
+              pattern = struct.pack('<f', val)
+              count = len(list(find_all(data, pattern)))
+              if count > 0:
+                  print(f"  {val}f: {count} 处")
           PYEOF
 
       - name: 上传
         uses: actions/upload-artifact@v4
         with:
           name: metadata-analysis
-          path: $(find . -name "*.txt" | head -1)
+          path: /home/runner/work/**/*.txt

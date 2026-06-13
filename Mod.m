@@ -1,7 +1,8 @@
-// Mod.m - 空洞骑士 GTE 版全功能 Mod（修复 UnityFramework 基址）
+// Mod.m - 空洞骑士 GTE 版全功能 Mod（最终版 + 日志）
 // 功能：攻击冷却0.15 + 黑冲无冷却无粒子 + 只加速攻击动画1.8x + Boss血量2.5x
 
 #import <Foundation/Foundation.h>
+#import <UIKit/UIKit.h>
 #import <objc/runtime.h>
 #import <mach-o/dyld.h>
 #import <dlfcn.h>
@@ -9,6 +10,7 @@
 #import <sys/mman.h>
 #import <mach/mach.h>
 #import <dispatch/dispatch.h>
+#import <os/log.h>
 
 // ========== 精确 RVA（相对于 UnityFramework） ==========
 #define HERO_TAKEDAMAGE_RVA            0x102614C
@@ -45,7 +47,7 @@ static BOOL                  g_hooks_done          = NO;
 static BOOL                  g_in_attack           = NO;
 static IMP                   g_orig_becomeActive   = NULL;
 
-// ========== 获取 UnityFramework 基址（修复版） ==========
+// ========== 获取 UnityFramework 基址 ==========
 static uint64_t GetBase(void) {
     for (int i = 0; i < _dyld_image_count(); i++) {
         const char* name = _dyld_get_image_name(i);
@@ -66,9 +68,15 @@ static void W(void* a, size_t s) {
 }
 
 static void Hook(void* tgt, void* fn, void** orig) {
-    if (!Ok(tgt)) return;
+    if (!Ok(tgt)) {
+        os_log(OS_LOG_DEFAULT, "[HKMod] Hook skipped: invalid target %p", tgt);
+        return;
+    }
     void* tr = mmap(NULL, 32, PROT_READ|PROT_WRITE, MAP_ANON|MAP_PRIVATE, -1, 0);
-    if (tr == MAP_FAILED) return;
+    if (tr == MAP_FAILED) {
+        os_log(OS_LOG_DEFAULT, "[HKMod] Hook failed: mmap error");
+        return;
+    }
     *orig = tr; W(tr, 32);
     memcpy(tr, tgt, 16);
     uint8_t* c = (uint8_t*)tr + 16;
@@ -80,6 +88,7 @@ static void Hook(void* tgt, void* fn, void** orig) {
     x[0]=0x58000050; x[1]=0xD61F0200;
     ((void**)x)[1] = fn;
     sys_icache_invalidate(tgt, 16);
+    os_log(OS_LOG_DEFAULT, "[HKMod] Hook installed at %p", tgt);
 }
 
 // ========== 修改玩家属性 ==========
@@ -150,22 +159,42 @@ static void hk_ApplyExtraDamage(void* enemy, int damage) {
 static void InstallAllHooks(void) {
     if (g_hooks_done) return;
     g_hooks_done = YES;
+    
     uint64_t base = GetBase();
-    if (!base) return;
-    NSLog(@"[Mod] UnityFramework base: 0x%llx", base);
-
-    void* a;
-    a = (void*)(base + HERO_SHADOWDASH_RVA);          Hook(a, hk_ShadowDash, (void**)&orig_ShadowDash);
-    a = (void*)(base + HERO_TAKEDAMAGE_RVA);           Hook(a, hk_TakeDamage, (void**)&orig_HeroTakeDamage);
-    a = (void*)(base + HERO_DOATTACK_RVA);             Hook(a, hk_DoAttack, (void**)&orig_DoAttack);
-    a = (void*)(base + ANIM_PLAY_FPS_RVA);             Hook(a, hk_AnimPlay, (void**)&orig_AnimPlay);
-    a = (void*)(base + ENEMY_APPLY_EXTRA_DAMAGE_RVA);  Hook(a, hk_ApplyExtraDamage, (void**)&orig_ApplyExtraDamage);
-    NSLog(@"[Mod] All hooks installed");
+    os_log(OS_LOG_DEFAULT, "[HKMod] UnityFramework base: 0x%llx", base);
+    
+    if (!base) {
+        os_log(OS_LOG_DEFAULT, "[HKMod] ERROR: base is 0");
+        return;
+    }
+    
+    void* addrs[5];
+    uint64_t rvas[] = {HERO_SHADOWDASH_RVA, HERO_TAKEDAMAGE_RVA, HERO_DOATTACK_RVA, ANIM_PLAY_FPS_RVA, ENEMY_APPLY_EXTRA_DAMAGE_RVA};
+    const char* names[] = {"ShadowDash", "TakeDamage", "DoAttack", "AnimPlay", "ApplyExtraDamage"};
+    
+    for (int i = 0; i < 5; i++) {
+        addrs[i] = (void*)(base + rvas[i]);
+        os_log(OS_LOG_DEFAULT, "[HKMod] %s: %p (valid=%d)", names[i], addrs[i], Ok(addrs[i]));
+    }
+    
+    if (Ok(addrs[0])) Hook(addrs[0], hk_ShadowDash, (void**)&orig_ShadowDash);
+    if (Ok(addrs[1])) Hook(addrs[1], hk_TakeDamage, (void**)&orig_HeroTakeDamage);
+    if (Ok(addrs[2])) Hook(addrs[2], hk_DoAttack, (void**)&orig_DoAttack);
+    if (Ok(addrs[3])) Hook(addrs[3], hk_AnimPlay, (void**)&orig_AnimPlay);
+    if (Ok(addrs[4])) Hook(addrs[4], hk_ApplyExtraDamage, (void**)&orig_ApplyExtraDamage);
+    
+    os_log(OS_LOG_DEFAULT, "[HKMod] Hooks installed: SD=%d TD=%d DA=%d AP=%d AED=%d",
+           orig_ShadowDash != NULL,
+           orig_HeroTakeDamage != NULL,
+           orig_DoAttack != NULL,
+           orig_AnimPlay != NULL,
+           orig_ApplyExtraDamage != NULL);
 }
 
 // ========== 注入时机 ==========
 static void hk_becomeActive(id self, SEL _cmd, id arg) {
     if (g_orig_becomeActive) ((void(*)(id,SEL,id))g_orig_becomeActive)(self, _cmd, arg);
+    os_log(OS_LOG_DEFAULT, "[HKMod] applicationDidBecomeActive triggered");
     static dispatch_once_t once;
     dispatch_once(&once, ^{
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 3*NSEC_PER_SEC), dispatch_get_global_queue(0,0), ^{
@@ -176,18 +205,36 @@ static void hk_becomeActive(id self, SEL _cmd, id arg) {
 
 static void InstallObjCHook(void) {
     Class c = objc_getClass("UnityAppController");
-    if (!c) return;
+    if (!c) {
+        os_log(OS_LOG_DEFAULT, "[HKMod] UnityAppController not found");
+        return;
+    }
     SEL s = sel_registerName("applicationDidBecomeActive:");
     Method m = class_getInstanceMethod(c, s);
     if (m) {
         g_orig_becomeActive = method_getImplementation(m);
         method_setImplementation(m, (IMP)hk_becomeActive);
+        os_log(OS_LOG_DEFAULT, "[HKMod] ObjC hook installed");
     }
 }
 
 // ========== 入口 ==========
 __attribute__((constructor))
 static void Init(void) {
+    os_log(OS_LOG_DEFAULT, "[HKMod] dylib loaded | iOS %@ | %@",
+           [[UIDevice currentDevice] systemVersion],
+           [[UIDevice currentDevice] model]);
+    
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 1 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
+        uint64_t base = GetBase();
+        os_log(OS_LOG_DEFAULT, "[HKMod] UnityFramework base: 0x%llx", base);
+        for (int i = 0; i < _dyld_image_count(); i++) {
+            const char* name = _dyld_get_image_name(i);
+            if (strstr(name, "UnityFramework") || strstr(name, "HollowKnight")) {
+                os_log(OS_LOG_DEFAULT, "[HKMod] %s slide=0x%llx", name, _dyld_get_image_vmaddr_slide(i));
+            }
+        }
+    });
+    
     InstallObjCHook();
-    NSLog(@"[Mod] Loaded");
 }

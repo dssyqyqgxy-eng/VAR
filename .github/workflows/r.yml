@@ -1,8 +1,6 @@
 name: 查找 SHADOW_DASH_COOLDOWN 数据源
 on:
   push:
-    paths:
-      - 'UnityFramework.zip'
   workflow_dispatch:
 jobs:
   search:

@@ -1,8 +1,6 @@
 name: 全文件搜索并修改黑冲冷却
 on:
   push:
-    paths:
-      - 'global-metadata.dat'
   workflow_dispatch:
 jobs:
   patch:

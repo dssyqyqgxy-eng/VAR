@@ -1,4 +1,4 @@
-name: 自动修改元数据
+name: 搜索并修改元数据
 on:
   push:
 
@@ -9,110 +9,56 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: 解压并查找偏移
+      - name: 解压
+        run: unzip -o script.zip
+
+      - name: 搜索特征值并修改
         run: |
-          unzip -o script.zip
-          # 找到解压后的 script.json
-          SCRIPT_PATH=$(find . -name "script.json" | head -1)
-          echo "找到 script.json: $SCRIPT_PATH"
+          python3 << 'PYEOF'
+          import struct, glob, json
+
+          # 1. 从 dump.cs 确认字段的类内偏移
+          dump_path = glob.glob("**/dump.cs", recursive=True)[0]
           
-          python3 << PYEOF
-          import json, struct, os, glob
-
-          # 找到 script.json
-          matches = glob.glob("**/script.json", recursive=True)
-          if not matches:
-              print("❌ 未找到 script.json")
-              exit(1)
+          field_offsets = {}
+          with open(dump_path, 'r', encoding='utf-8', errors='ignore') as f:
+              for line in f:
+                  for key in ["attack_cooldown", "SHADOW_DASH_COOLDOWN", "hasShadowDash", "canShadowDash", "public int hp"]:
+                      if key in line and "// 0x" in line:
+                          offset = line.split("// 0x")[-1].strip().split()[0]
+                          field_offsets[key] = int(offset, 16)
+                          print(f"  {key}: 类内偏移 0x{offset}")
           
-          script_path = matches[0]
-          print(f"📂 使用: {script_path}")
-
-          targets = {
-              "attack_cooldown": None,
-              "SHADOW_DASH_COOLDOWN": None,
-              "hasShadowDash": None,
-              "canShadowDash": None,
-          }
-
-          with open(script_path, 'r', encoding='utf-8', errors='ignore') as f:
-              data = json.load(f)
-
-          if 'ScriptMetadata' in data:
-              for item in data['ScriptMetadata']:
-                  name = item.get('Name', '')
-                  addr = item.get('Address', 0)
-                  for key in targets:
-                      if key in name:
-                          targets[key] = addr
-                          print(f"  ✅ {key}: 0x{addr:X}")
-
-          # 如果没找到，列出相关条目
-          if not any(targets.values()):
-              print("\n❌ 未找到精确匹配，列出相关条目:")
-              if 'ScriptMetadata' in data:
-                  for item in data['ScriptMetadata']:
-                      name = item.get('Name', '')
-                      if any(k in name.lower() for k in ['attack', 'shadow', 'dash']):
-                          print(f"  {name} @ 0x{item.get('Address', 0):X}")
-          PYEOF
-
-      - name: 修改 metadata
-        run: |
-          SCRIPT_PATH=$(find . -name "script.json" | head -1)
+          # 2. 在 metadata 文件中搜索这些默认值
+          # 攻击冷却默认值 0.4f, 黑冲冷却 0.5f
+          print("\n=== 在 metadata 中搜索默认值 ===")
           
-          python3 << PYEOF
-          import json, struct, glob
-
-          matches = glob.glob("**/script.json", recursive=True)
-          script_path = matches[0]
-
-          targets = {}
-          with open(script_path, 'r', encoding='utf-8', errors='ignore') as f:
-              data = json.load(f)
-          if 'ScriptMetadata' in data:
-              for item in data['ScriptMetadata']:
-                  name = item.get('Name', '')
-                  addr = item.get('Address', 0)
-                  for key in ["attack_cooldown", "SHADOW_DASH_COOLDOWN", "hasShadowDash", "canShadowDash"]:
-                      if key in name:
-                          targets[key] = addr
-
-          if not targets:
-              print("❌ 无有效偏移")
-              exit(0)
-
-          PATCHES = []
-          if "attack_cooldown" in targets:
-              PATCHES.append((targets["attack_cooldown"], 0.15, 'float'))
-          if "SHADOW_DASH_COOLDOWN" in targets:
-              PATCHES.append((targets["SHADOW_DASH_COOLDOWN"], 0.0, 'float'))
-          if "hasShadowDash" in targets:
-              PATCHES.append((targets["hasShadowDash"], True, 'bool'))
-          if "canShadowDash" in targets:
-              PATCHES.append((targets["canShadowDash"], True, 'bool'))
-
           with open('global-metadata.dat', 'rb') as f:
-              buf = bytearray(f.read())
-
-          for offset, value, vtype in PATCHES:
-              if offset >= len(buf):
-                  print(f"❌ 0x{offset:X} 超出")
-                  continue
-              if vtype == 'float':
-                  new = struct.pack('<f', value)
-              else:
-                  new = struct.pack('<?', bool(value))
-              buf[offset:offset+len(new)] = new
-              print(f"✅ 0x{offset:07X} 已修改")
-
-          with open('global-metadata.dat', 'wb') as f:
-              f.write(buf)
-          print("✅ 完成")
+              data = f.read()
+          
+          # 搜索 float 值 0.4 (攻击冷却默认)
+          pattern = struct.pack('<f', 0.4)
+          pos = 0
+          while True:
+              pos = data.find(pattern, pos)
+              if pos == -1: break
+              print(f"  0.4f @ 0x{pos:07X}")
+              pos += 1
+          
+          # 搜索 float 值 0.5 (黑冲冷却默认)
+          pattern = struct.pack('<f', 0.5)
+          pos = 0
+          while True:
+              pos = data.find(pattern, pos)
+              if pos == -1: break
+              print(f"  0.5f @ 0x{pos:07X}")
+              pos += 1
+          
           PYEOF
 
-      - name: 上传
+      - name: 上传搜索结果
         uses: actions/upload-artifact@v4
         with:
-          name: global-metadata-patched
-          path: global-metadata.dat
+          name: search-results
+          path: |
+            $(find . -name "dump.cs" | head -1)

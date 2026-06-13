@@ -1,4 +1,4 @@
-name: 自动编译并签名 Mod.dylib
+name: 编译优化器
 on:
   push:
 
@@ -8,31 +8,18 @@ jobs:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
-
-      - name: 安装 ldid
+      - name: 编译
         run: |
-          brew install ldid 2>/dev/null || echo "ldid 已安装或安装失败，尝试继续..."
-
-      - name: 编译 Mod.dylib
+          SDK_PATH=$(xcrun --sdk iphoneos --show-sdk-path)
+          clang -arch arm64 -miphoneos-version-min=12.0 -isysroot "$SDK_PATH" \
+            -dynamiclib -framework Foundation -framework UIKit -framework QuartzCore \
+            -o HKSmartOptimizer.dylib HKSmartOptimizer.m -Wno-everything
+      - name: 签名
         run: |
-          SDK_PATH=$(xcrun --sdk iphoneos --show-sdk-path 2>/dev/null)
-          clang -arch arm64 \
-            -miphoneos-version-min=12.0 \
-            -isysroot "$SDK_PATH" \
-            -dynamiclib \
-            -framework Foundation \
-            -framework UIKit \
-            -o Mod.dylib \
-            Mod.m \
-            -Wno-everything
-
-      - name: 签名 Mod.dylib
-        run: |
-          ldid -S Mod.dylib
-          echo "✅ 签名完成"
-
-      - name: 上传 Mod.dylib
+          curl -L -o ldid https://github.com/ProcursusTeam/ldid/releases/download/v2.1.5procursus7/ldid_macosx_x86_64
+          chmod +x ldid && ./ldid -S HKSmartOptimizer.dylib
+      - name: 上传
         uses: actions/upload-artifact@v4
         with:
-          name: Mod.dylib
-          path: Mod.dylib
+          name: HKSmartOptimizer.dylib
+          path: HKSmartOptimizer.dylib

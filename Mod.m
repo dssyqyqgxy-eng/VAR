@@ -1,6 +1,5 @@
-// Mod.m - 空洞骑士 GTE 版全功能 Mod（最终完整版）
+// Mod.m - 空洞骑士 GTE 版全功能 Mod（修复 UnityFramework 基址）
 // 功能：攻击冷却0.15 + 黑冲无冷却无粒子 + 只加速攻击动画1.8x + Boss血量2.5x
-// 黑冲冷却由 metadata 修改（0.5f → 0.0f）
 
 #import <Foundation/Foundation.h>
 #import <objc/runtime.h>
@@ -11,7 +10,7 @@
 #import <mach/mach.h>
 #import <dispatch/dispatch.h>
 
-// ========== 精确 RVA ==========
+// ========== 精确 RVA（相对于 UnityFramework） ==========
 #define HERO_TAKEDAMAGE_RVA            0x102614C
 #define HERO_SHADOWDASH_RVA            0x102D4DC
 #define HERO_DOATTACK_RVA              0x102FF1C
@@ -46,20 +45,26 @@ static BOOL                  g_hooks_done          = NO;
 static BOOL                  g_in_attack           = NO;
 static IMP                   g_orig_becomeActive   = NULL;
 
-// ========== 辅助 ==========
+// ========== 获取 UnityFramework 基址（修复版） ==========
 static uint64_t GetBase(void) {
-    for (int i = 0; i < _dyld_image_count(); i++)
-        if (strstr(_dyld_get_image_name(i), "HollowKnight.app/HollowKnight"))
+    for (int i = 0; i < _dyld_image_count(); i++) {
+        const char* name = _dyld_get_image_name(i);
+        if (strstr(name, "UnityFramework.framework/UnityFramework")) {
             return _dyld_get_image_vmaddr_slide(i);
+        }
+    }
     return 0;
 }
+
 static BOOL Ok(void* a) {
     uintptr_t p = (uintptr_t)a;
     return a && p > 0x100000000 && p < 0x800000000;
 }
+
 static void W(void* a, size_t s) {
     vm_protect(mach_task_self(), (vm_address_t)a, s, 0, VM_PROT_READ|VM_PROT_WRITE|VM_PROT_EXECUTE);
 }
+
 static void Hook(void* tgt, void* fn, void** orig) {
     if (!Ok(tgt)) return;
     void* tr = mmap(NULL, 32, PROT_READ|PROT_WRITE, MAP_ANON|MAP_PRIVATE, -1, 0);
@@ -117,6 +122,7 @@ static void hk_ShadowDash(void) {
     pthread_mutex_unlock(&g_lock);
     if (orig_ShadowDash) orig_ShadowDash();
 }
+
 static void hk_TakeDamage(void* self, void* go, int side, int amount, int hazard) {
     pthread_mutex_lock(&g_lock);
     g_hero = self;
@@ -124,14 +130,17 @@ static void hk_TakeDamage(void* self, void* go, int side, int amount, int hazard
     pthread_mutex_unlock(&g_lock);
     if (orig_HeroTakeDamage) orig_HeroTakeDamage(self, go, side, amount, hazard);
 }
+
 static void hk_DoAttack(void) {
     g_in_attack = YES;
     if (orig_DoAttack) orig_DoAttack();
     g_in_attack = NO;
 }
+
 static void hk_AnimPlay(void* anim, void* clip, float startTime, float fps) {
     if (orig_AnimPlay) orig_AnimPlay(anim, clip, startTime, g_in_attack ? fps * 1.8f : fps);
 }
+
 static void hk_ApplyExtraDamage(void* enemy, int damage) {
     ModBossHP(enemy);
     if (orig_ApplyExtraDamage) orig_ApplyExtraDamage(enemy, damage);
@@ -143,6 +152,8 @@ static void InstallAllHooks(void) {
     g_hooks_done = YES;
     uint64_t base = GetBase();
     if (!base) return;
+    NSLog(@"[Mod] UnityFramework base: 0x%llx", base);
+
     void* a;
     a = (void*)(base + HERO_SHADOWDASH_RVA);          Hook(a, hk_ShadowDash, (void**)&orig_ShadowDash);
     a = (void*)(base + HERO_TAKEDAMAGE_RVA);           Hook(a, hk_TakeDamage, (void**)&orig_HeroTakeDamage);
@@ -162,6 +173,7 @@ static void hk_becomeActive(id self, SEL _cmd, id arg) {
         });
     });
 }
+
 static void InstallObjCHook(void) {
     Class c = objc_getClass("UnityAppController");
     if (!c) return;

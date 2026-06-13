@@ -1,34 +1,58 @@
-name: 编译优化器
+name: 自动修改元数据
 on:
   push:
 
   workflow_dispatch:
 jobs:
-  build:
-    runs-on: macos-latest
+  patch:
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      - name: 编译
+      - name: 确认偏移 + 修改
         run: |
-          SDK_PATH=$(xcrun --sdk iphoneos --show-sdk-path)
-          clang -arch arm64 -miphoneos-version-min=12.0 -isysroot "$SDK_PATH" \
-            -dynamiclib -framework Foundation -framework UIKit -framework QuartzCore \
-            -o HKSmartOptimizer.dylib HKSmartOptimizer.m -Wno-everything
-          echo "✅ 编译完成"
+          python3 << 'PYEOF'
+          import struct, os, subprocess
 
-      - name: 签名
-        run: |
-          # 使用 Xcode 自带的 codesign 进行伪签名
-          codesign -f -s - HKSmartOptimizer.dylib 2>/dev/null || echo "⚠️ codesign 失败，尝试 ldid"
-          # 备选：从 Procursus 的正式仓库下载
-          if [ ! -f ldid ]; then
-            curl -L -o ldid.tar.gz https://github.com/ProcursusTeam/ldid/archive/refs/tags/v2.1.5-procursus7.tar.gz 2>/dev/null || true
-          fi
-          echo "✅ 签名完成"
+          print("=== 从 dump.cs 确认偏移 ===")
+          for keyword in ["attack_cooldown", "SHADOW_DASH_COOLDOWN", "hasShadowDash", "canShadowDash", "public int hp"]:
+              result = subprocess.run(["grep", "-n", keyword, "dump.cs"], capture_output=True, text=True)
+              if result.stdout:
+                  print(f"\n[{keyword}]")
+                  print(result.stdout[:200])
+              else:
+                  print(f"\n[{keyword}] 未找到")
+
+          print("\n=== 开始修改 ===")
+          PATCHES = [
+              (0x15A3B80, 0.15, 'float'),
+              (0x15A3B88, 0.0,  'float'),
+              (0x15A3C00, True, 'bool'),
+              (0x15A3C01, True, 'bool'),
+          ]
+
+          with open('global-metadata.dat', 'rb') as f:
+              data = bytearray(f.read())
+
+          for offset, value, vtype in PATCHES:
+              if offset >= len(data):
+                  print(f"❌ 0x{offset:X} 超出")
+                  continue
+              old = data[offset:offset+4]
+              if vtype == 'float':
+                  new = struct.pack('<f', value)
+              else:
+                  new = struct.pack('<?', bool(value))
+              data[offset:offset+len(new)] = new
+              print(f"✅ 0x{offset:07X}: {old.hex()} -> {new.hex()}")
+
+          with open('global-metadata.dat', 'wb') as f:
+              f.write(data)
+          print("✅ 完成")
+          PYEOF
 
       - name: 上传
         uses: actions/upload-artifact@v4
         with:
-          name: HKSmartOptimizer.dylib
-          path: HKSmartOptimizer.dylib
+          name: global-metadata-patched
+          path: global-metadata.dat

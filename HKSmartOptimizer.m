@@ -1,4 +1,4 @@
-// HKSmartOptimizer.m - 空洞骑士智能优化器（纯净版）
+// HKSmartOptimizer.m - 空洞骑士智能优化器（修复版）
 // 自适应帧率 + 分场景分辨率 + 自动场景检测
 
 #import <Foundation/Foundation.h>
@@ -24,8 +24,8 @@ typedef NS_ENUM(NSInteger, HKSceneType) {
 // 2. 场景配置
 // ==========================================
 typedef struct {
-    float resolutionScale;  // 1.0=原生, 1.5=降1/3, 2.0=降一半
-    int   targetFPS;        // 目标帧率
+    float resolutionScale;
+    int   targetFPS;
 } HKSceneConfig;
 
 // ==========================================
@@ -33,6 +33,7 @@ typedef struct {
 // ==========================================
 static CADisplayLink* g_monitorLink    = nil;
 static int   g_deviceMaxFPS            = 60;
+static int   g_targetFPS               = 60;
 static float g_resolutionScale         = 1.0f;
 static HKSceneType g_currentScene      = HKSceneTypeUnknown;
 static NSDictionary* g_sceneConfigs    = nil;
@@ -187,10 +188,9 @@ static void SetResolutionScale(float scale) {
 static void LockFrameRate(int fps) {
     if (fps == g_targetFPS) return;
     g_targetFPS = fps;
-
     dispatch_async(dispatch_get_main_queue(), ^{
-        if (@available(iOS 15.0, *)) {
-            [UIScreen mainScreen].maximumFramesPerSecond = fps;
+        if (g_monitorLink) {
+            g_monitorLink.preferredFramesPerSecond = fps;
         }
     });
 }
@@ -205,14 +205,14 @@ static void ApplySceneConfig(HKSceneType scene) {
 }
 
 // ==========================================
-// 10. 帧回调（仅检测场景切换）
+// 10. 帧回调
 // ==========================================
 @interface HKMonitorTarget : NSObject
 @end
 @implementation HKMonitorTarget
 - (void)onFrame:(CADisplayLink*)link {
     static int counter = 0;
-    if (++counter % 120 == 0) {  // 每2秒检测一次
+    if (++counter % 120 == 0) {
         HKSceneType newScene = DetectCurrentScene();
         if (newScene != g_currentScene) {
             g_currentScene = newScene;
@@ -231,6 +231,7 @@ static void InitSmartOptimizer(void) {
     g_initialized = YES;
 
     g_deviceMaxFPS = DetectDeviceMaxFPS();
+    g_targetFPS = g_deviceMaxFPS;
     SetupSceneConfigs();
 
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 3 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
@@ -239,6 +240,7 @@ static void InitSmartOptimizer(void) {
 
         HKMonitorTarget* target = [[HKMonitorTarget alloc] init];
         g_monitorLink = [CADisplayLink displayLinkWithTarget:target selector:@selector(onFrame:)];
+        g_monitorLink.preferredFramesPerSecond = g_deviceMaxFPS;
         [g_monitorLink addToRunLoop:[NSRunLoop mainRunLoop] forMode:NSRunLoopCommonModes];
     });
 }

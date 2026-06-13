@@ -1,72 +1,52 @@
-name: 编译 Mod + 安全修改黑冲冷却
+name: 精确修改黑冲冷却（三字段定位）
 on:
   push:
 
   workflow_dispatch:
 jobs:
-  build-and-patch:
-    runs-on: macos-latest
+  patch:
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      - name: 编译 Mod.dylib
-        run: |
-          SDK_PATH=$(xcrun --sdk iphoneos --show-sdk-path)
-          clang -arch arm64 -miphoneos-version-min=12.0 -isysroot "$SDK_PATH" \
-            -dynamiclib -framework Foundation -framework UIKit \
-            -o Mod.dylib Mod.m -Wno-everything
-          codesign -f -s - Mod.dylib 2>/dev/null || true
-          echo "✅ 编译完成"
-
-      - name: 安全修改（只改已知位置）
+      - name: 三字段定位 + 修改
         run: |
           python3 << 'PYEOF'
           import struct
 
-          # 从之前搜索确认的 0.5f 位置列表
-          # 这些是 metadata 中所有 0.5f 的位置
-          # 黑冲冷却大概率是其中一个
-          KNOWN_05F_POSITIONS = [
-              0x0000519, 0x0001231, 0x00021B1, 0x0002D61,
-              0x0003439, 0x0003C91, 0x00041D9, 0x00044E9,
-              0x0005A61, 0x0005F49, 0x0006191, 0x00068D1,
-              0x0006981, 0x0006BA1, 0x0006BF1,
-          ]
-
           with open('global-metadata.dat', 'rb') as f:
               data = bytearray(f.read())
 
-          pattern = struct.pack('<f', 0.5)
-          new_val = struct.pack('<f', 0.0)
+          s1 = data.find(b"SHADOW_DASH_SPEED")
+          s2 = data.find(b"SHADOW_DASH_TIME")
+          s3 = data.find(b"SHADOW_DASH_COOLDOWN")
 
-          # 验证所有已知位置
-          print("=== 验证已知 0.5f 位置 ===")
-          valid_positions = []
-          for pos in KNOWN_05F_POSITIONS:
-              if pos + 4 <= len(data) and data[pos:pos+4] == pattern:
-                  valid_positions.append(pos)
-                  ctx = data[max(0,pos-8):min(len(data),pos+12)]
-                  print(f"  ✅ 0x{pos:07X}: {ctx.hex()}")
+          print(f"SPEED    @ 0x{s1:07X}")
+          print(f"TIME     @ 0x{s2:07X}")
+          print(f"COOLDOWN @ 0x{s3:07X}")
 
-          print(f"\n共 {len(valid_positions)} 个有效位置")
+          p03 = struct.pack('<f', 0.3)
+          p05 = struct.pack('<f', 0.5)
 
-          # 安全策略：不改任何 0.5f
-          # 因为无法区分哪个是黑冲冷却
-          # 改为在 Mod.m 中 Hook ShadowDash 时直接写内存修改 SHADOW_DASH_COOLDOWN
-          print("\n⚠️ 无法精确区分，跳过 metadata 修改")
-          print("💡 黑冲冷却由 Mod.m Hook 处理（ModHero 中已包含 SHD_COOLDOWN = 0.0f）")
+          center = (s1 + s2 + s3) // 3
+          start = max(0, center - 1000)
+          end = min(len(data), center + 1000)
 
-          # 文件不做修改
+          pos = start
+          while pos < end - 8:
+              if data[pos:pos+4] == p03 and data[pos+4:pos+8] == p05:
+                  print(f"\n✅ 找到 0.3f+0.5f 相邻 @ 0x{pos:07X}")
+                  data[pos+4:pos+8] = struct.pack('<f', 0.0)
+                  with open('global-metadata.dat', 'wb') as f:
+                      f.write(data)
+                  print("✅ 黑冲冷却 → 0.0f")
+                  exit(0)
+              pos += 4
+
+          print("❌ 未找到，跳过修改")
           PYEOF
 
-      - name: 上传 Mod.dylib
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
-          name: Mod.dylib
-          path: Mod.dylib
-
-      - name: 上传元数据（未修改）
-        uses: actions/upload-artifact@v4
-        with:
-          name: global-metadata-original
+          name: global-metadata-patched
           path: global-metadata.dat

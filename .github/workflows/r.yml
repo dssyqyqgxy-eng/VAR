@@ -1,9 +1,7 @@
 name: 编译 Mod + 安全修改黑冲冷却
 on:
   push:
-    paths:
-      - 'Mod.m'
-      - 'global-metadata.dat'
+
   workflow_dispatch:
 jobs:
   build-and-patch:

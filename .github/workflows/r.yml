@@ -1,6 +1,8 @@
 name: 查找 SHADOW_DASH_COOLDOWN 数据源
 on:
   push:
+    paths:
+      - 'UnityFramework.zip'
   workflow_dispatch:
 jobs:
   search:
@@ -9,18 +11,22 @@ jobs:
       - uses: actions/checkout@v4
       - name: 解压
         run: unzip -o UnityFramework.zip
+      - name: 安装 capstone
+        run: pip install capstone
       - name: 搜索
         run: |
           python3 << 'PYEOF'
           import struct
+          from capstone import Cs, CS_ARCH_ARM64, CS_MODE_ARM
+
           with open('UnityFramework', 'rb') as f:
               data = f.read()
 
-          # 搜索 ldr s0, [x20, #0x2624] 的机器码
-          # 浮点 LDR: 0xBD400000 | (rn<<5) | (imm12<<10)
-          # rn=x20(20), imm12=0x2624/4=0x989
-          target_insn = 0xBD400000 | (20 << 5) | (0x989 << 10)
-          pattern = struct.pack('<I', target_insn)
+          md = Cs(CS_ARCH_ARM64, CS_MODE_ARM)
+
+          # ldr s0, [x20, #0x2624]
+          target = 0xBD400000 | (20 << 5) | (0x989 << 10)
+          pattern = struct.pack('<I', target)
 
           pos = 0
           found = []
@@ -32,30 +38,23 @@ jobs:
 
           print(f"找到 {len(found)} 处\n")
 
-          # 反汇编上下文
-          from capstone import Cs, CS_ARCH_ARM64, CS_MODE_ARM
-          md = Cs(CS_ARCH_ARM64, CS_MODE_ARM)
-
-          for addr in found[:5]:
+          for addr in found:
               print(f"=== @ 0x{addr:08X} ===")
               code = data[max(0,addr-48):min(len(data),addr+48)]
               for ins in md.disasm(code, max(0,addr-48)):
-                  marker = "  <-- SHADOW_DASH_COOLDOWN" if ins.address == addr else ""
-                  print(f"  0x{ins.address:x}: {ins.mnemonic} {ins.op_str}{marker}")
+                  m = "  <-- SHADOW_DASH_COOLDOWN" if ins.address == addr else ""
+                  print(f"  0x{ins.address:x}: {ins.mnemonic} {ins.op_str}{m}")
               print()
 
-          # 搜索 __DATA 段中 0x2624 偏移处的值（如果 x20 是 DATA 段基址）
-          # x20 指向的位置可能是 0x023XXXXX 范围
-          print("=== 搜索 0.5f 在 DATA 段 0x2624 附近 ===")
-          p05 = struct.pack('<f', 0.5)
-          for off in range(0x2624 - 0x40, 0x2624 + 0x40, 4):
+          # 搜索 DATA 段 0x2624 附近的值
+          print("=== DATA 段 0x2624 附近的值 ===")
+          for off in range(0x2624-0x20, 0x2624+0x20, 4):
               addr = 0x021A8000 + off
               if addr + 4 <= len(data):
                   val = struct.unpack('<f', data[addr:addr+4])[0]
-                  if abs(val - 0.5) < 0.01:
-                      print(f"  DATA 0x{addr:08X} (off 0x{off:X}): {val}f  <-- 候选")
+                  print(f"  0x{addr:08X} (+0x{off:X}): {val}f")
           PYEOF
       - uses: actions/upload-artifact@v4
         with:
-          name: shadow-cooldown-source
+          name: shadow-cooldown-data
           path: $(find . -name "*.txt" | head -1)

@@ -1,8 +1,6 @@
 name: 搜索 SHADOW_DASH_COOLDOWN 初始化
 on:
   push:
-    paths:
-      - 'UnityFramework.zip'
   workflow_dispatch:
 jobs:
   search:

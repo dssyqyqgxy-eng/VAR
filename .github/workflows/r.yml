@@ -1,4 +1,4 @@
-name: 编译 Mod + 精确修改黑冲冷却
+name: 编译 Mod + 安全修改黑冲冷却
 on:
   push:
 
@@ -9,7 +9,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # ========== 1. 编译 Mod.dylib ==========
       - name: 编译 Mod.dylib
         run: |
           SDK_PATH=$(xcrun --sdk iphoneos --show-sdk-path)
@@ -17,68 +16,57 @@ jobs:
             -dynamiclib -framework Foundation -framework UIKit \
             -o Mod.dylib Mod.m -Wno-everything
           codesign -f -s - Mod.dylib 2>/dev/null || true
-          echo "✅ Mod.dylib 编译完成"
+          echo "✅ 编译完成"
 
-      # ========== 2. 精确修改黑冲冷却 ==========
-      - name: 修改元数据
+      - name: 安全修改（只改已知位置）
         run: |
           python3 << 'PYEOF'
           import struct
 
+          # 从之前搜索确认的 0.5f 位置列表
+          # 这些是 metadata 中所有 0.5f 的位置
+          # 黑冲冷却大概率是其中一个
+          KNOWN_05F_POSITIONS = [
+              0x0000519, 0x0001231, 0x00021B1, 0x0002D61,
+              0x0003439, 0x0003C91, 0x00041D9, 0x00044E9,
+              0x0005A61, 0x0005F49, 0x0006191, 0x00068D1,
+              0x0006981, 0x0006BA1, 0x0006BF1,
+          ]
+
           with open('global-metadata.dat', 'rb') as f:
               data = bytearray(f.read())
 
-          str_pos = data.find(b"SHADOW_DASH_COOLDOWN")
-          if str_pos == -1:
-              print("❌ 未找到字符串")
-              exit(1)
-
-          print(f"字符串 @ 0x{str_pos:07X}")
-
           pattern = struct.pack('<f', 0.5)
-          found = False
+          new_val = struct.pack('<f', 0.0)
 
-          for search_start in [max(0, str_pos - 512), str_pos]:
-              search_end = min(len(data), search_start + 1024)
-              pos = search_start
-              while pos < search_end:
-                  pos = data.find(pattern, pos, search_end)
-                  if pos == -1: break
-                  dist = pos - str_pos
-                  ctx = data[max(0,pos-16):min(len(data),pos+16)]
-                  print(f"  候选 0x{pos:07X} (距 {dist:+d}): {ctx.hex()}")
-                  if abs(dist) < 300 and not found:
-                      data[pos:pos+4] = struct.pack('<f', 0.0)
-                      print(f"  ✅ 已修改")
-                      found = True
-                  pos += 1
+          # 验证所有已知位置
+          print("=== 验证已知 0.5f 位置 ===")
+          valid_positions = []
+          for pos in KNOWN_05F_POSITIONS:
+              if pos + 4 <= len(data) and data[pos:pos+4] == pattern:
+                  valid_positions.append(pos)
+                  ctx = data[max(0,pos-8):min(len(data),pos+12)]
+                  print(f"  ✅ 0x{pos:07X}: {ctx.hex()}")
 
-          if not found:
-              print("⚠️ 未找到精确位置，回退全局修改")
-              pos = 0
-              count = 0
-              while True:
-                  pos = data.find(pattern, pos)
-                  if pos == -1: break
-                  data[pos:pos+4] = struct.pack('<f', 0.0)
-                  count += 1
-                  pos += 4
-              print(f"  全局修改 {count} 处")
+          print(f"\n共 {len(valid_positions)} 个有效位置")
 
-          with open('global-metadata.dat', 'wb') as f:
-              f.write(data)
-          print("✅ 元数据修改完成")
+          # 安全策略：不改任何 0.5f
+          # 因为无法区分哪个是黑冲冷却
+          # 改为在 Mod.m 中 Hook ShadowDash 时直接写内存修改 SHADOW_DASH_COOLDOWN
+          print("\n⚠️ 无法精确区分，跳过 metadata 修改")
+          print("💡 黑冲冷却由 Mod.m Hook 处理（ModHero 中已包含 SHD_COOLDOWN = 0.0f）")
+
+          # 文件不做修改
           PYEOF
 
-      # ========== 3. 上传 ==========
       - name: 上传 Mod.dylib
         uses: actions/upload-artifact@v4
         with:
           name: Mod.dylib
           path: Mod.dylib
 
-      - name: 上传元数据
+      - name: 上传元数据（未修改）
         uses: actions/upload-artifact@v4
         with:
-          name: global-metadata-patched
+          name: global-metadata-original
           path: global-metadata.dat

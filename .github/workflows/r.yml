@@ -1,66 +1,37 @@
-name: Ghidra 自动分析 UnityFramework
+name: objdump 反汇编关键函数
 on:
   push:
-  
-  workflow_dispatch:  
-    
+    paths:
+      - 'UnityFramework.zip'
+  workflow_dispatch:
 jobs:
   analyze:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
-      - name: 安装 Java
+      - name: 安装工具
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y -qq openjdk-17-jdk-headless
-
-      - name: 下载 Ghidra
-        run: |
-          wget -q https://github.com/NationalSecurityAgency/ghidra/releases/download/Ghidra_11.0.3_build/ghidra_11.0.3_PUBLIC_20240410.zip
-          unzip -q ghidra_11.0.3_PUBLIC_20240410.zip
-          echo "✅ Ghidra 已解压"
-
-      - name: 解压 UnityFramework
+          sudo apt-get install -y -qq binutils-aarch64-linux-gnu
+      - name: 解压
         run: unzip -o UnityFramework.zip
-
-      - name: 创建 Ghidra 项目并导入
+      - name: 反汇编
         run: |
-          GHIDRA=$(find . -name "ghidra_*" -type d | head -1)
-          
-          $GHIDRA/support/analyzeHeadless \
-            /tmp/ghidra_project \
-            HollowKnight \
-            -import UnityFramework \
-            -overwrite \
-            -postScript ghidra_script.py 2>/dev/null || true
-
-      - name: 运行自定义脚本搜索字段
-        run: |
-          cat > ghidra_script.py << 'PYEOF'
-          import struct
-
-          # 搜索 DATA 段中的 0.5f，找到被 ShadowDash 函数引用的那个
-          data_start = 0x021A8000
-          data_end   = 0x023E4000
-
-          with open('UnityFramework', 'rb') as f:
-              data = f.read()
-
-          p05 = struct.pack('<f', 0.5)
-          pos = data_start
-          count = 0
-          while pos < data_end and count < 50:
-              pos = data.find(p05, pos, data_end)
-              if pos == -1: break
-              ctx = data[max(0,pos-16):min(len(data),pos+20)]
-              # 找周围有没有 SHADOW_DASH 字符串引用
-              print(f"0.5f @ 0x{pos:08X}: {ctx.hex()}")
-              count += 1
-              pos += 4
-          PYEOF
-
+          echo "=== ShadowDash (0x102D4DC) ==="
+          aarch64-linux-gnu-objdump -d --start-address=0x102D4DC --stop-address=0x102D550 UnityFramework 2>/dev/null
+          echo ""
+          echo "=== TakeDamage (0x102614C) ==="
+          aarch64-linux-gnu-objdump -d --start-address=0x102614C --stop-address=0x10261C0 UnityFramework 2>/dev/null
+          echo ""
+          echo "=== ApplyExtraDamage (0x1022A58) ==="
+          aarch64-linux-gnu-objdump -d --start-address=0x1022A58 --stop-address=0x1022AD0 UnityFramework 2>/dev/null
+          echo ""
+          echo "=== DoAttack (0x102FF1C) ==="
+          aarch64-linux-gnu-objdump -d --start-address=0x102FF1C --stop-address=0x102FF80 UnityFramework 2>/dev/null
+          echo ""
+          echo "=== AnimPlay (0x1314A7C) ==="
+          aarch64-linux-gnu-objdump -d --start-address=0x1314A7C --stop-address=0x1314AE0 UnityFramework 2>/dev/null
       - uses: actions/upload-artifact@v4
         with:
-          name: ghidra-output
-          path: /tmp/ghidra_project
+          name: disasm-output
+          path: $(find . -name "*.txt" | head -1)

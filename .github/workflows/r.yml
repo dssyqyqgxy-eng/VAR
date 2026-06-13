@@ -1,7 +1,6 @@
-name: 反汇编搜索 SHADOW_DASH_COOLDOWN 初始化
+name: 查找 SHADOW_DASH_COOLDOWN 数据源
 on:
   push:
-
   workflow_dispatch:
 jobs:
   search:
@@ -10,44 +9,53 @@ jobs:
       - uses: actions/checkout@v4
       - name: 解压
         run: unzip -o UnityFramework.zip
-      - name: 安装 Capstone
-        run: pip install capstone
-      - name: 反汇编搜索
+      - name: 搜索
         run: |
           python3 << 'PYEOF'
-          from capstone import *
           import struct
-
           with open('UnityFramework', 'rb') as f:
               data = f.read()
 
+          # 搜索 ldr s0, [x20, #0x2624] 的机器码
+          # 浮点 LDR: 0xBD400000 | (rn<<5) | (imm12<<10)
+          # rn=x20(20), imm12=0x2624/4=0x989
+          target_insn = 0xBD400000 | (20 << 5) | (0x989 << 10)
+          pattern = struct.pack('<I', target_insn)
+
+          pos = 0
+          found = []
+          while pos < 0x021A8000:
+              pos = data.find(pattern, pos)
+              if pos == -1: break
+              found.append(pos)
+              pos += 1
+
+          print(f"找到 {len(found)} 处\n")
+
+          # 反汇编上下文
+          from capstone import Cs, CS_ARCH_ARM64, CS_MODE_ARM
           md = Cs(CS_ARCH_ARM64, CS_MODE_ARM)
-          text_end = 0x021A8000
 
-          print("=== 搜索 STR 到偏移 0x80 的指令 ===\n")
-          count = 0
-          for addr in range(0, text_end, 4):
-              if addr + 4 > len(data): break
-              insn = struct.unpack('<I', data[addr:addr+4])[0]
-              
-              # STR (immediate) float: 0xBD000000
-              # str sX, [xN, #imm]
-              if (insn & 0xFFC00000) == 0xBD000000:
-                  imm = ((insn >> 10) & 0xFFF) << 2  # 浮点 STR 偏移要 x4
-                  if imm == 0x80:
-                      count += 1
-                      if count <= 30:
-                          # 打印前后指令
-                          code = data[max(0,addr-64):min(len(data),addr+20)]
-                          print(f"--- #{count} @ 0x{addr:08X} ---")
-                          for ins in md.disasm(code, max(0,addr-64)):
-                              marker = " <--" if ins.address == addr else ""
-                              print(f"  0x{ins.address:x}: {ins.mnemonic} {ins.op_str}{marker}")
-                          print()
+          for addr in found[:5]:
+              print(f"=== @ 0x{addr:08X} ===")
+              code = data[max(0,addr-48):min(len(data),addr+48)]
+              for ins in md.disasm(code, max(0,addr-48)):
+                  marker = "  <-- SHADOW_DASH_COOLDOWN" if ins.address == addr else ""
+                  print(f"  0x{ins.address:x}: {ins.mnemonic} {ins.op_str}{marker}")
+              print()
 
-          print(f"共找到 {count} 处")
+          # 搜索 __DATA 段中 0x2624 偏移处的值（如果 x20 是 DATA 段基址）
+          # x20 指向的位置可能是 0x023XXXXX 范围
+          print("=== 搜索 0.5f 在 DATA 段 0x2624 附近 ===")
+          p05 = struct.pack('<f', 0.5)
+          for off in range(0x2624 - 0x40, 0x2624 + 0x40, 4):
+              addr = 0x021A8000 + off
+              if addr + 4 <= len(data):
+                  val = struct.unpack('<f', data[addr:addr+4])[0]
+                  if abs(val - 0.5) < 0.01:
+                      print(f"  DATA 0x{addr:08X} (off 0x{off:X}): {val}f  <-- 候选")
           PYEOF
       - uses: actions/upload-artifact@v4
         with:
-          name: str-0x80
+          name: shadow-cooldown-source
           path: $(find . -name "*.txt" | head -1)

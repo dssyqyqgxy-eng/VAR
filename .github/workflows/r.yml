@@ -1,72 +1,63 @@
-name: 编译 Mod + 安全修改黑冲冷却
+name: 解压修改 UnityFramework
 on:
-  push:
-
   workflow_dispatch:
 jobs:
-  build-and-patch:
-    runs-on: macos-latest
+  patch:
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      - name: 编译 Mod.dylib
+      - name: 查找并解压
         run: |
-          SDK_PATH=$(xcrun --sdk iphoneos --show-sdk-path)
-          clang -arch arm64 -miphoneos-version-min=12.0 -isysroot "$SDK_PATH" \
-            -dynamiclib -framework Foundation -framework UIKit \
-            -o Mod.dylib Mod.m -Wno-everything
-          codesign -f -s - Mod.dylib 2>/dev/null || true
-          echo "✅ 编译完成"
+          # 找压缩包
+          ARCHIVE=$(find . -name "*.zip" -o -name "*.tar.gz" -o -name "*.tar" | head -1)
+          echo "找到: $ARCHIVE"
+          
+          # 解压
+          if [[ "$ARCHIVE" == *.zip ]]; then
+              unzip -o "$ARCHIVE"
+          elif [[ "$ARCHIVE" == *.tar.gz ]]; then
+              tar -xzf "$ARCHIVE"
+          elif [[ "$ARCHIVE" == *.tar ]]; then
+              tar -xf "$ARCHIVE"
+          fi
+          
+          # 找 UnityFramework 文件
+          UF=$(find . -name "UnityFramework" -type f | head -1)
+          echo "UnityFramework: $UF"
+          ls -la "$UF"
 
-      - name: 安全修改（只改已知位置）
+      - name: 修改二进制
         run: |
-          python3 << 'PYEOF'
+          UF=$(find . -name "UnityFramework" -type f | head -1)
+          python3 << PYEOF
           import struct
-
-          # 从之前搜索确认的 0.5f 位置列表
-          # 这些是 metadata 中所有 0.5f 的位置
-          # 黑冲冷却大概率是其中一个
-          KNOWN_05F_POSITIONS = [
-              0x0000519, 0x0001231, 0x00021B1, 0x0002D61,
-              0x0003439, 0x0003C91, 0x00041D9, 0x00044E9,
-              0x0005A61, 0x0005F49, 0x0006191, 0x00068D1,
-              0x0006981, 0x0006BA1, 0x0006BF1,
-          ]
-
-          with open('global-metadata.dat', 'rb') as f:
+          with open("$UF", 'rb') as f:
               data = bytearray(f.read())
-
-          pattern = struct.pack('<f', 0.5)
-          new_val = struct.pack('<f', 0.0)
-
-          # 验证所有已知位置
-          print("=== 验证已知 0.5f 位置 ===")
-          valid_positions = []
-          for pos in KNOWN_05F_POSITIONS:
-              if pos + 4 <= len(data) and data[pos:pos+4] == pattern:
-                  valid_positions.append(pos)
-                  ctx = data[max(0,pos-8):min(len(data),pos+12)]
-                  print(f"  ✅ 0x{pos:07X}: {ctx.hex()}")
-
-          print(f"\n共 {len(valid_positions)} 个有效位置")
-
-          # 安全策略：不改任何 0.5f
-          # 因为无法区分哪个是黑冲冷却
-          # 改为在 Mod.m 中 Hook ShadowDash 时直接写内存修改 SHADOW_DASH_COOLDOWN
-          print("\n⚠️ 无法精确区分，跳过 metadata 修改")
-          print("💡 黑冲冷却由 Mod.m Hook 处理（ModHero 中已包含 SHD_COOLDOWN = 0.0f）")
-
-          # 文件不做修改
+          print(f"文件: {len(data)} 字节")
+          
+          for old_v, new_v, name in [(0.4, 0.15, "攻击冷却"), (0.5, 0.0, "黑冲冷却")]:
+              old = struct.pack('<f', old_v)
+              new = struct.pack('<f', new_v)
+              c, pos = 0, 0
+              while True:
+                  pos = data.find(old, pos)
+                  if pos == -1: break
+                  data[pos:pos+4] = new
+                  c += 1; pos += 4
+              print(f"{name}: {old_v}f→{new_v}f ({c}处)")
+          
+          with open("$UF", 'wb') as f:
+              f.write(data)
+          print("✅ 完成")
           PYEOF
 
-      - name: 上传 Mod.dylib
-        uses: actions/upload-artifact@v4
+      - name: 重新打包
+        run: |
+          UF=$(find . -name "UnityFramework" -type f | head -1)
+          cp "$UF" UnityFramework-patched
+          
+      - uses: actions/upload-artifact@v4
         with:
-          name: Mod.dylib
-          path: Mod.dylib
-
-      - name: 上传元数据（未修改）
-        uses: actions/upload-artifact@v4
-        with:
-          name: global-metadata-original
-          path: global-metadata.dat
+          name: UnityFramework-patched
+          path: UnityFramework-patched

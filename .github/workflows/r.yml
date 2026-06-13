@@ -12,53 +12,63 @@ jobs:
       - name: 解压
         run: unzip -o script.zip
 
-      - name: 搜索特征值并修改
+      - name: 搜索特征值
         run: |
           python3 << 'PYEOF'
-          import struct, glob, json
+          import struct, glob
 
-          # 1. 从 dump.cs 确认字段的类内偏移
           dump_path = glob.glob("**/dump.cs", recursive=True)[0]
-          
-          field_offsets = {}
+          print(f"📂 dump.cs: {dump_path}")
+
+          print("\n=== 字段类内偏移 ===")
           with open(dump_path, 'r', encoding='utf-8', errors='ignore') as f:
               for line in f:
-                  for key in ["attack_cooldown", "SHADOW_DASH_COOLDOWN", "hasShadowDash", "canShadowDash", "public int hp"]:
-                      if key in line and "// 0x" in line:
-                          offset = line.split("// 0x")[-1].strip().split()[0]
-                          field_offsets[key] = int(offset, 16)
-                          print(f"  {key}: 类内偏移 0x{offset}")
-          
-          # 2. 在 metadata 文件中搜索这些默认值
-          # 攻击冷却默认值 0.4f, 黑冲冷却 0.5f
-          print("\n=== 在 metadata 中搜索默认值 ===")
-          
+                  if "// 0x" in line:
+                      for key in ["attack_cooldown", "SHADOW_DASH_COOLDOWN", "hasShadowDash", "canShadowDash", "hp"]:
+                          if key in line:
+                              print(f"  {line.strip()}")
+
+          print("\n=== 搜索 float 默认值 ===")
           with open('global-metadata.dat', 'rb') as f:
               data = f.read()
-          
-          # 搜索 float 值 0.4 (攻击冷却默认)
-          pattern = struct.pack('<f', 0.4)
-          pos = 0
-          while True:
-              pos = data.find(pattern, pos)
-              if pos == -1: break
-              print(f"  0.4f @ 0x{pos:07X}")
-              pos += 1
-          
-          # 搜索 float 值 0.5 (黑冲冷却默认)
-          pattern = struct.pack('<f', 0.5)
-          pos = 0
-          while True:
-              pos = data.find(pattern, pos)
-              if pos == -1: break
-              print(f"  0.5f @ 0x{pos:07X}")
-              pos += 1
-          
+
+          for val, name in [(0.4, "攻击冷却"), (0.5, "黑冲冷却")]:
+              pattern = struct.pack('<f', val)
+              pos, count = 0, 0
+              while count < 10:
+                  pos = data.find(pattern, pos)
+                  if pos == -1: break
+                  print(f"  {name} ({val}f) @ 0x{pos:07X}")
+                  pos += 1
+                  count += 1
+
+          print("\n=== 搜索 bool 默认值 ===")
+          # hasShadowDash/canShadowDash 默认 false = 0x00
+          # 搜索连续的 0x00 0x00 0x00 0x00 附近有字段标志
+          print("  bool 字段默认 false，需手动确认偏移")
           PYEOF
 
-      - name: 上传搜索结果
+      - name: 保存结果
+        run: |
+          mkdir -p output
+          python3 << 'PYEOF' > output/search_result.txt
+          import struct, glob
+          dump_path = glob.glob("**/dump.cs", recursive=True)[0]
+          with open(dump_path) as f:
+              for line in f:
+                  if "// 0x" in line and any(k in line for k in ["attack_cooldown", "SHADOW_DASH", "hasShadowDash", "canShadowDash", "hp"]):
+                      print(line.strip())
+          with open('global-metadata.dat', 'rb') as f:
+              data = f.read()
+          for val, name in [(0.4, "攻击冷却"), (0.5, "黑冲冷却")]:
+              p = struct.pack('<f', val)
+              for i, pos in enumerate([data.find(p)]):
+                  if pos != -1:
+                      print(f"{name} ({val}f) @ 0x{pos:07X}")
+          PYEOF
+
+      - name: 上传结果
         uses: actions/upload-artifact@v4
         with:
           name: search-results
-          path: |
-            $(find . -name "dump.cs" | head -1)
+          path: output/

@@ -1,7 +1,8 @@
-name: 自动解压修改 UnityFramework
+name: 自动修改 UnityFramework
 on:
   push:
-
+    paths:
+      - '*.zip'
   workflow_dispatch:
 jobs:
   patch:
@@ -9,22 +10,51 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: 解压 → 修改 → 输出
+      - name: 找到正确的压缩包
         run: |
-          ARCHIVE=$(find . -name "*.zip" -o -name "*.tar.gz" -o -name "*.tar" | head -1)
-          echo "📦 $ARCHIVE"
+          # 列出所有 zip
+          echo "=== 所有 zip 文件 ==="
+          find . -name "*.zip" -ls
           
-          if [[ "$ARCHIVE" == *.zip ]]; then unzip -o "$ARCHIVE"
-          elif [[ "$ARCHIVE" == *.tar.gz ]]; then tar -xzf "$ARCHIVE"
-          elif [[ "$ARCHIVE" == *.tar ]]; then tar -xf "$ARCHIVE"
+          # 找包含 UnityFramework 的 zip（排除 script.zip 和 search.zip）
+          TARGET=""
+          for f in $(find . -name "*.zip"); do
+            if unzip -l "$f" | grep -q "UnityFramework"; then
+              TARGET="$f"
+              break
+            fi
+          done
+          
+          # 或者直接用文件名判断
+          if [ -z "$TARGET" ]; then
+            TARGET=$(find . -name "UnityFramework*" -o -name "unityframework*" | head -1)
           fi
           
-          UF=$(find . -name "UnityFramework" -type f | head -1)
-          echo "🔧 $UF ($(wc -c < "$UF") 字节)"
+          # 如果都没有，尝试所有 zip
+          if [ -z "$TARGET" ]; then
+            for f in $(find . -name "*.zip" ! -name "script*" ! -name "search*"); do
+              TARGET="$f"
+              break
+            fi
+          fi
           
+          echo "📦 使用: $TARGET"
+          unzip -o "$TARGET"
+          
+          UF=$(find . -name "UnityFramework" -type f ! -path "*script*" ! -path "*search*" | head -1)
+          echo "🔧 修改: $UF ($(wc -c < "$UF") 字节)"
+
           python3 << PYEOF
-          import struct
-          with open("$UF", 'rb') as f:
+          import struct, os
+          uf_path = os.environ.get("UF", "")
+          if not uf_path:
+              # fallback
+              import glob
+              candidates = glob.glob("**/UnityFramework", recursive=True)
+              candidates = [c for c in candidates if 'script' not in c and 'search' not in c]
+              uf_path = candidates[0] if candidates else ""
+          print(f"使用: {uf_path}")
+          with open(uf_path, 'rb') as f:
               data = bytearray(f.read())
           for old_v, new_v, name in [(0.4, 0.15, "攻击冷却"), (0.5, 0.0, "黑冲冷却")]:
               old = struct.pack('<f', old_v)
@@ -36,11 +66,11 @@ jobs:
                   data[pos:pos+4] = new
                   c += 1; pos += 4
               print(f"{name}: {old_v}f→{new_v}f ({c}处)")
-          with open("$UF", 'wb') as f:
+          with open(uf_path, 'wb') as f:
               f.write(data)
           print("✅ 完成")
           PYEOF
-          
+
           cp "$UF" UnityFramework-patched
 
       - uses: actions/upload-artifact@v4

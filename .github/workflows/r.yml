@@ -1,26 +1,110 @@
-name: 编译 Mod.dylib
+name: Extract SharedAssets Resource
+
 on:
+  workflow_dispatch:  # 手动触发
   push:
-    
-  workflow_dispatch:
+    paths:
+      - 'sharedassets.resource'  # 自动触发（推送到仓库时）
+
 jobs:
-  build:
-    runs-on: macos-latest
+  extract:
+    runs-on: ubuntu-latest
+    
     steps:
-      - uses: actions/checkout@v4
-
-      - name: 编译
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+          
+      - name: Install UnityPy
         run: |
-          SDK_PATH=$(xcrun --sdk iphoneos --show-sdk-path)
-          clang -arch arm64 -miphoneos-version-min=12.0 -isysroot "$SDK_PATH" \
-            -dynamiclib -framework Foundation -framework UIKit \
-            -o Mod.dylib Mod.m -Wno-everything
-          codesign -f -s - Mod.dylib 2>/dev/null || true
-          echo "✅ 编译完成"
-          ls -la Mod.dylib
-
-      - name: 上传
+          pip install UnityPy
+          
+      - name: Extract resource to txt
+        run: |
+          python3 << 'EOF'
+          import UnityPy
+          import json
+          import os
+          
+          # 确保输出目录存在
+          os.makedirs("output", exist_ok=True)
+          
+          # 加载 sharedassets.resource
+          env = UnityPy.load("sharedassets.resource")
+          
+          all_data = []
+          
+          for obj in env.objects:
+              obj_data = {
+                  "type": obj.type.name,
+                  "path_id": obj.path_id
+              }
+              
+              # 读取对象
+              data = obj.read()
+              
+              # MonoBehaviour：导出脚本内容
+              if obj.type.name == "MonoBehaviour":
+                  obj_data["name"] = data.name if hasattr(data, 'name') else "Unknown"
+                  obj_data["script_data"] = {}
+                  
+                  # 获取所有可序列化字段
+                  for k, v in data.script.items():
+                      try:
+                          obj_data["script_data"][k] = str(v)
+                      except:
+                          obj_data["script_data"][k] = f"<{type(v).__name__}>"
+                  
+                  # 保存为单独的 JSON 文件
+                  filename = f"output/MonoBehaviour_{obj_data['name']}_{obj.path_id}.json"
+                  with open(filename, "w", encoding="utf-8") as f:
+                      json.dump(obj_data, f, indent=2, ensure_ascii=False)
+                  
+              # TextAsset：直接导出文本
+              elif obj.type.name == "TextAsset":
+                  obj_data["name"] = data.name
+                  obj_data["text"] = data.script
+                  
+                  filename = f"output/TextAsset_{data.name}.txt"
+                  with open(filename, "w", encoding="utf-8") as f:
+                      f.write(data.script)
+              
+              # GameObject：只记录结构
+              elif obj.type.name == "GameObject":
+                  obj_data["name"] = data.name
+                  obj_data["components"] = [c.type.name for c in data.components]
+              
+              all_data.append(obj_data)
+          
+          # 保存总体摘要
+          with open("output/summary.json", "w", encoding="utf-8") as f:
+              json.dump(all_data, f, indent=2, ensure_ascii=False)
+          
+          # 统计
+          print(f"提取完成！")
+          print(f"  - MonoBehaviour: {len([d for d in all_data if d['type'] == 'MonoBehaviour'])} 个")
+          print(f"  - TextAsset: {len([d for d in all_data if d['type'] == 'TextAsset'])} 个")
+          print(f"  - GameObject: {len([d for d in all_data if d['type'] == 'GameObject'])} 个")
+          EOF
+          
+      - name: List extracted files
+        run: |
+          echo "=== 提取的文件列表 ==="
+          ls -la output/
+          
+      - name: Show summary
+        run: |
+          if [ -f output/summary.json ]; then
+            head -100 output/summary.json
+          fi
+          
+      - name: Upload extracted content
         uses: actions/upload-artifact@v4
         with:
-          name: Mod.dylib
-          path: Mod.dylib
+          name: extracted-resources
+          path: output/
+          retention-days: 7

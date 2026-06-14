@@ -1,17 +1,16 @@
-name: Extract SharedAssets Resource
+name: Auto Extract SharedAssets Resource
 
 on:
-  workflow_dispatch:  # 手动触发
+  workflow_dispatch:
   push:
-    paths:
-      - 'sharedassets.resource'  # 自动触发（推送到仓库时）
+    branches: [ main, master ]
 
 jobs:
-  extract:
+  auto-extract:
     runs-on: ubuntu-latest
     
     steps:
-      - name: Checkout repository
+      - name: Checkout
         uses: actions/checkout@v4
         
       - name: Setup Python
@@ -20,91 +19,140 @@ jobs:
           python-version: '3.10'
           
       - name: Install UnityPy
-        run: |
-          pip install UnityPy
-          
-      - name: Extract resource to txt
+        run: pip install UnityPy
+        
+      - name: Auto find and extract resource files
         run: |
           python3 << 'EOF'
           import UnityPy
           import json
           import os
+          import glob
           
-          # 确保输出目录存在
+          # 自动查找根目录下的所有 .resource 文件
+          resource_files = glob.glob("*.resource")
+          
+          if not resource_files:
+              print("未找到 .resource 文件")
+              exit(1)
+          
+          print(f"找到 {len(resource_files)} 个 resource 文件: {resource_files}")
+          
           os.makedirs("output", exist_ok=True)
           
-          # 加载 sharedassets.resource
-          env = UnityPy.load("sharedassets.resource")
-          
-          all_data = []
-          
-          for obj in env.objects:
-              obj_data = {
-                  "type": obj.type.name,
-                  "path_id": obj.path_id
-              }
+          for res_file in resource_files:
+              print(f"\n=== 处理: {res_file} ===")
+              file_output_dir = f"output/{res_file}_extracted"
+              os.makedirs(file_output_dir, exist_ok=True)
               
-              # 读取对象
-              data = obj.read()
+              env = UnityPy.load(res_file)
               
-              # MonoBehaviour：导出脚本内容
-              if obj.type.name == "MonoBehaviour":
-                  obj_data["name"] = data.name if hasattr(data, 'name') else "Unknown"
-                  obj_data["script_data"] = {}
-                  
-                  # 获取所有可序列化字段
-                  for k, v in data.script.items():
+              mono_count = 0
+              text_count = 0
+              
+              for obj in env.objects:
+                  if obj.type.name == "MonoBehaviour":
                       try:
-                          obj_data["script_data"][k] = str(v)
+                          data = obj.read()
+                          
+                          # 获取类型名
+                          type_name = "Unknown"
+                          if hasattr(data, 'm_Script') and data.m_Script:
+                              if hasattr(data.m_Script, 'm_ClassName'):
+                                  type_name = data.m_Script.m_ClassName
+                          
+                          obj_name = getattr(data, 'name', f'obj_{obj.path_id}')
+                          
+                          result = {
+                              "type": type_name,
+                              "name": obj_name,
+                              "values": {}
+                          }
+                          
+                          # 提取字段值
+                          for key, val in data.script.items():
+                              # 跳过 Unity 内部字段
+                              if key in ['m_Script', 'm_GameObject', 'm_Enabled', 'm_Name']:
+                                  continue
+                              try:
+                                  if hasattr(val, 'value'):
+                                      val = val.value
+                                  # 记录数值和短字符串
+                                  if isinstance(val, (int, float, bool)):
+                                      result["values"][key] = val
+                                  elif isinstance(val, str) and len(val) < 200:
+                                      result["values"][key] = val
+                              except:
+                                  pass
+                          
+                          if result["values"]:
+                              safe_name = f"{type_name}_{obj_name}".replace("/", "_").replace(".", "_").replace(" ", "_")
+                              safe_name = safe_name[:50]  # 限制长度
+                              with open(f"{file_output_dir}/{safe_name}.json", "w", encoding="utf-8") as f:
+                                  json.dump(result, f, indent=2, ensure_ascii=False)
+                              mono_count += 1
+                      except Exception as e:
+                          pass
+                  
+                  elif obj.type.name == "TextAsset":
+                      try:
+                          data = obj.read()
+                          if hasattr(data, 'script') and data.script:
+                              with open(f"{file_output_dir}/TextAsset_{obj.path_id}.txt", "w", encoding="utf-8") as f:
+                                  f.write(str(data.script))
+                              text_count += 1
                       except:
-                          obj_data["script_data"][k] = f"<{type(v).__name__}>"
-                  
-                  # 保存为单独的 JSON 文件
-                  filename = f"output/MonoBehaviour_{obj_data['name']}_{obj.path_id}.json"
-                  with open(filename, "w", encoding="utf-8") as f:
-                      json.dump(obj_data, f, indent=2, ensure_ascii=False)
-                  
-              # TextAsset：直接导出文本
-              elif obj.type.name == "TextAsset":
-                  obj_data["name"] = data.name
-                  obj_data["text"] = data.script
-                  
-                  filename = f"output/TextAsset_{data.name}.txt"
-                  with open(filename, "w", encoding="utf-8") as f:
-                      f.write(data.script)
+                          pass
               
-              # GameObject：只记录结构
-              elif obj.type.name == "GameObject":
-                  obj_data["name"] = data.name
-                  obj_data["components"] = [c.type.name for c in data.components]
+              print(f"  - MonoBehaviour: {mono_count} 个")
+              print(f"  - TextAsset: {text_count} 个")
               
-              all_data.append(obj_data)
+              # 生成该文件的汇总
+              summary = []
+              for root, dirs, files in os.walk(file_output_dir):
+                  for f in files:
+                      if f.endswith('.json'):
+                          with open(os.path.join(root, f), 'r', encoding='utf-8') as jf:
+                              try:
+                                  data = json.load(jf)
+                                  if data.get('values'):
+                                      summary.append({
+                                          "file": f,
+                                          "type": data.get('type'),
+                                          "values": data.get('values')
+                                      })
+                              except:
+                                  pass
+              
+              if summary:
+                  with open(f"{file_output_dir}/_summary.json", "w", encoding="utf-8") as f:
+                      json.dump(summary, f, indent=2, ensure_ascii=False)
           
-          # 保存总体摘要
-          with open("output/summary.json", "w", encoding="utf-8") as f:
-              json.dump(all_data, f, indent=2, ensure_ascii=False)
+          # 生成总体报告
+          total_report = {}
+          for res_file in resource_files:
+              summary_path = f"output/{res_file}_extracted/_summary.json"
+              if os.path.exists(summary_path):
+                  with open(summary_path, 'r') as f:
+                      total_report[res_file] = json.load(f)
           
-          # 统计
-          print(f"提取完成！")
-          print(f"  - MonoBehaviour: {len([d for d in all_data if d['type'] == 'MonoBehaviour'])} 个")
-          print(f"  - TextAsset: {len([d for d in all_data if d['type'] == 'TextAsset'])} 个")
-          print(f"  - GameObject: {len([d for d in all_data if d['type'] == 'GameObject'])} 个")
+          with open("output/complete_report.json", "w", encoding="utf-8") as f:
+              json.dump(total_report, f, indent=2, ensure_ascii=False)
+          
+          print(f"\n✅ 完成！输出目录: output/")
           EOF
           
-      - name: List extracted files
+      - name: Show extracted content preview
         run: |
-          echo "=== 提取的文件列表 ==="
-          ls -la output/
+          echo "=== 提取的文件 ==="
+          find output -name "*.json" | head -20
+          echo ""
+          echo "=== 找到的数值预览 ==="
+          find output -name "*summary*.json" -exec cat {} \; 2>/dev/null | head -100
           
-      - name: Show summary
-        run: |
-          if [ -f output/summary.json ]; then
-            head -100 output/summary.json
-          fi
-          
-      - name: Upload extracted content
+      - name: Upload results
         uses: actions/upload-artifact@v4
         with:
-          name: extracted-resources
+          name: extracted-game-data
           path: output/
           retention-days: 7

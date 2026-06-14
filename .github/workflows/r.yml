@@ -1,11 +1,10 @@
-name: Convert Resource to TXT
+name: Extract Real Game Values
 
 on:
   push:
-     
 
 jobs:
-  convert:
+  extract:
     runs-on: ubuntu-latest
     
     steps:
@@ -20,50 +19,58 @@ jobs:
       - name: Install UnityPy
         run: pip install UnityPy
         
-      - name: Convert all .resource to TXT
+      - name: Extract MonoBehaviour fields
         run: |
           python3 << 'EOF'
           import UnityPy
+          import json
           import os
           import glob
           
-          os.makedirs("txt_output", exist_ok=True)
+          os.makedirs("output", exist_ok=True)
           
-          # 找所有 .resource 文件
           for res_file in glob.glob("*.resource"):
-              print(f"\n处理: {res_file}")
+              print(f"\n=== {res_file} ===")
               env = UnityPy.load(res_file)
               
-              output_file = f"txt_output/{res_file}.txt"
-              
-              with open(output_file, "w", encoding="utf-8") as out:
-                  out.write(f"=== {res_file} 提取内容 ===\n\n")
+              for obj in env.objects:
+                  if obj.type.name != "MonoBehaviour":
+                      continue
                   
-                  for obj in env.objects:
-                      try:
-                          data = obj.read()
-                          out.write(f"\n--- 对象类型: {obj.type.name} | ID: {obj.path_id} ---\n")
+                  try:
+                      data = obj.read()
+                      
+                      # 获取类型名称（重要！）
+                      script_type = "Unknown"
+                      if hasattr(data, 'm_Script') and data.m_Script:
+                          if hasattr(data.m_Script, 'm_ClassName'):
+                              script_type = data.m_Script.m_ClassName
+                      
+                      obj_name = getattr(data, 'name', 'Unnamed')
+                      
+                      print(f"\n--- {script_type} : {obj_name} ---")
+                      
+                      # 遍历所有字段
+                      for key, value in data.script.items():
+                          # 跳过内部引用
+                          if key in ['m_Script', 'm_GameObject', 'm_Enabled', 'm_Name', 'm_ObjectHideFlags']:
+                              continue
                           
-                          # 输出所有字段
-                          for attr in dir(data):
-                              if not attr.startswith('_') and not callable(getattr(data, attr)):
-                                  try:
-                                      val = getattr(data, attr)
-                                      out.write(f"{attr}: {val}\n")
-                                  except:
-                                      pass
-                          out.write("\n")
-                      except Exception as e:
-                          out.write(f"错误: {e}\n")
-              
-              print(f"  输出: {output_file}")
+                          # 尝试获取实际值
+                          try:
+                              if hasattr(value, 'value'):
+                                  val = value.value
+                              else:
+                                  val = value
+                              
+                              # 只显示有意义的数值
+                              if val is not None:
+                                  print(f"  {key} = {val}")
+                          except:
+                              pass
+                      
+                  except Exception as e:
+                      print(f"  跳过: {e}")
           
-          print("\n✅ 转换完成")
+          print("\n✅ 完成")
           EOF
-          
-      - name: Upload TXT files
-        uses: actions/upload-artifact@v4
-        with:
-          name: resource-txt
-          path: txt_output/*.txt
-          retention-days: 30

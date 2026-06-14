@@ -1,77 +1,46 @@
-name: Deserialize Resource Values
-
-on:
+name: NOP 黑冲冷却 + 充能粒子
+on: 
   push:
-
 jobs:
-  deserialize:
+  patch:
     runs-on: ubuntu-latest
-    
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.10'
-          
-      - name: Install UnityPy
-        run: pip install UnityPy
-        
-      - name: Deserialize and print all values
+      - uses: actions/checkout@v4
+      - name: 解压
+        run: unzip -o UnityFramework.zip
+      - name: NOP
         run: |
-          python3 << 'EOF'
-          import UnityPy
-          import glob
+          python3 << 'PYEOF'
+          import struct
+          with open('UnityFramework', 'rb') as f:
+              data = bytearray(f.read())
           
-          for res_file in glob.glob("*.resource"):
-              print(f"\n{'='*50}")
-              print(f"文件: {res_file}")
-              print('='*50)
-              
-              env = UnityPy.load(res_file)
-              
-              for obj in env.objects:
-                  if obj.type.name != "MonoBehaviour":
-                      continue
-                  
-                  try:
-                      data = obj.read()
-                      
-                      # 获取类型名
-                      type_name = "Unknown"
-                      if hasattr(data, 'm_Script') and data.m_Script:
-                          type_name = getattr(data.m_Script, 'm_ClassName', 'Unknown')
-                      
-                      print(f"\n【类型】{type_name}")
-                      print(f"【名称】{getattr(data, 'name', '无')}")
-                      print(f"【字段】")
-                      
-                      # 打印所有字段和值
-                      for key, val in data.script.items():
-                          # 跳过 Unity 内部字段
-                          if key in ['m_Script', 'm_GameObject', 'm_Enabled', 'm_Name', 'm_ObjectHideFlags']:
-                              continue
-                          
-                          # 获取实际值
-                          actual_val = val.value if hasattr(val, 'value') else val
-                          
-                          # 只显示数值、布尔、短字符串
-                          if isinstance(actual_val, (int, float, bool)):
-                              print(f"    {key} = {actual_val}")
-                          elif isinstance(actual_val, str) and len(actual_val) < 100:
-                              print(f"    {key} = \"{actual_val}\"")
-                          
-                  except Exception as e:
-                      pass
+          nop = struct.pack('<I', 0xD503201F)
           
-          print("\n✅ 完成")
-          EOF
+          # 黑冲冷却相关
+          data[0x1df9c:0x1df9c+4] = nop  # SHADOW_DASH_SPEED str
+          data[0x1dfa4:0x1dfa4+4] = nop  # SHADOW_DASH_COOLDOWN str
+          print("✅ NOP SHADOW_DASH_SPEED + COOLDOWN")
           
-      - name: Upload
-        uses: actions/upload-artifact@v4
+          # 搜索 shadowRechargePrefab 相关 STR
+          # 偏移 0x398, STR xN 指令
+          found = 0
+          for addr in range(0, 0x021A8000, 4):
+              insn = struct.unpack('<I', data[addr:addr+4])[0]
+              if (insn & 0xFFC00000) == 0xF9000000:
+                  if ((insn >> 10) & 0xFFF) == 0x398:
+                      data[addr:addr+4] = nop
+                      found += 1
+                      print(f"✅ NOP shadowRechargePrefab @ 0x{addr:08X}")
+          
+          if found == 0:
+              print("⚠️ 未找到 shadowRechargePrefab STR")
+          
+          with open('UnityFramework', 'wb') as f:
+              f.write(data)
+          print("✅ 完成")
+          PYEOF
+      - uses: actions/upload-artifact@v4
         with:
-          name: deserialized-values
-          path: ./*.txt 2>/dev/null || echo "done"
-          retention-days: 30
+          name: UnityFramework-patched
+          path: UnityFramework

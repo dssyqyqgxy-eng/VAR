@@ -1,10 +1,10 @@
-name: Extract Resource to TXT and Upload
+name: Deserialize Resource Values
 
 on:
   push:
 
 jobs:
-  extract:
+  deserialize:
     runs-on: ubuntu-latest
     
     steps:
@@ -19,42 +19,59 @@ jobs:
       - name: Install UnityPy
         run: pip install UnityPy
         
-      - name: Extract all to TXT
+      - name: Deserialize and print all values
         run: |
           python3 << 'EOF'
           import UnityPy
-          import os
           import glob
           
-          os.makedirs("output", exist_ok=True)
-          
           for res_file in glob.glob("*.resource"):
-              print(f"\n处理: {res_file}")
+              print(f"\n{'='*50}")
+              print(f"文件: {res_file}")
+              print('='*50)
+              
               env = UnityPy.load(res_file)
               
-              with open(f"output/{res_file}.txt", "w", encoding="utf-8") as out:
-                  for obj in env.objects:
-                      out.write(f"\n=== Type: {obj.type.name} | ID: {obj.path_id} ===\n")
-                      try:
-                          data = obj.read()
-                          for attr in dir(data):
-                              if not attr.startswith('_'):
-                                  try:
-                                      val = getattr(data, attr)
-                                      if not callable(val):
-                                          out.write(f"{attr}: {val}\n")
-                                  except:
-                                      pass
-                      except Exception as e:
-                          out.write(f"Error: {e}\n")
+              for obj in env.objects:
+                  if obj.type.name != "MonoBehaviour":
+                      continue
+                  
+                  try:
+                      data = obj.read()
+                      
+                      # 获取类型名
+                      type_name = "Unknown"
+                      if hasattr(data, 'm_Script') and data.m_Script:
+                          type_name = getattr(data.m_Script, 'm_ClassName', 'Unknown')
+                      
+                      print(f"\n【类型】{type_name}")
+                      print(f"【名称】{getattr(data, 'name', '无')}")
+                      print(f"【字段】")
+                      
+                      # 打印所有字段和值
+                      for key, val in data.script.items():
+                          # 跳过 Unity 内部字段
+                          if key in ['m_Script', 'm_GameObject', 'm_Enabled', 'm_Name', 'm_ObjectHideFlags']:
+                              continue
+                          
+                          # 获取实际值
+                          actual_val = val.value if hasattr(val, 'value') else val
+                          
+                          # 只显示数值、布尔、短字符串
+                          if isinstance(actual_val, (int, float, bool)):
+                              print(f"    {key} = {actual_val}")
+                          elif isinstance(actual_val, str) and len(actual_val) < 100:
+                              print(f"    {key} = \"{actual_val}\"")
+                          
+                  except Exception as e:
+                      pass
           
-          print("✅ 提取完成")
+          print("\n✅ 完成")
           EOF
           
-      # ⬇️⬇️⬇️ 上传步骤 ⬇️⬇️⬇️
-      - name: Upload artifacts
+      - name: Upload
         uses: actions/upload-artifact@v4
         with:
-          name: extracted-txt
-          path: output/
+          name: deserialized-values
+          path: ./*.txt 2>/dev/null || echo "done"
           retention-days: 30

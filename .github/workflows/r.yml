@@ -22,14 +22,17 @@ jobs:
             arch: arm64
             sdk: iphoneos
             deployment_target: 11.0
+            identifier: ios-arm64
           - name: ios_simulator_arm64
             arch: arm64
             sdk: iphonesimulator
             deployment_target: 11.0
+            identifier: ios-arm64-simulator
           - name: ios_simulator_x86_64
             arch: x86_64
             sdk: iphonesimulator
             deployment_target: 11.0
+            identifier: ios-x86_64-simulator
 
     steps:
       - name: Checkout insert_dylib source
@@ -39,21 +42,10 @@ jobs:
           path: insert_dylib_src
           ref: master
 
-      - name: List source files (debug)
-        working-directory: insert_dylib_src
-        run: |
-          echo "=== Root directory ==="
-          ls -la
-          echo "=== insert_dylib directory ==="
-          ls -la insert_dylib/ 2>/dev/null || echo "insert_dylib folder not found"
-          echo "=== src directory ==="
-          ls -la src/ 2>/dev/null || echo "src folder not found"
-
       - name: Build static library for ${{ matrix.config.sdk }}
         working-directory: insert_dylib_src
         run: |
-          # 根据实际路径编译 main.c
-          # 尝试多个可能的路径
+          # 查找 main.c
           if [ -f "insert_dylib/main.c" ]; then
             SOURCE_FILE="insert_dylib/main.c"
           elif [ -f "src/main.c" ]; then
@@ -119,12 +111,14 @@ jobs:
         with:
           path: artifacts
 
-      - name: Create XCFramework
+      - name: Create XCFramework with explicit identifiers
         run: |
           mkdir -p xcframework_output
           
+          # 复制头文件
           cp artifacts/ios_device_arm64/insert_dylib.h xcframework_output/
           
+          # 创建 XCFramework，显式指定每个库的标识符
           xcodebuild -create-xcframework \
             -library artifacts/ios_device_arm64/libinsert_dylib.a \
             -library artifacts/ios_simulator_arm64/libinsert_dylib.a \

@@ -2,6 +2,7 @@
 name: Build insert_dylib for iOS
 
 on:
+
   push:
     branches: [ main, master ]
 
@@ -38,13 +39,38 @@ jobs:
           path: insert_dylib_src
           ref: master
 
+      - name: List source files (debug)
+        working-directory: insert_dylib_src
+        run: |
+          echo "=== Root directory ==="
+          ls -la
+          echo "=== insert_dylib directory ==="
+          ls -la insert_dylib/ 2>/dev/null || echo "insert_dylib folder not found"
+          echo "=== src directory ==="
+          ls -la src/ 2>/dev/null || echo "src folder not found"
+
       - name: Build static library for ${{ matrix.config.sdk }}
         working-directory: insert_dylib_src
         run: |
-          # 编译 main.c
+          # 根据实际路径编译 main.c
+          # 尝试多个可能的路径
+          if [ -f "insert_dylib/main.c" ]; then
+            SOURCE_FILE="insert_dylib/main.c"
+          elif [ -f "src/main.c" ]; then
+            SOURCE_FILE="src/main.c"
+          elif [ -f "main.c" ]; then
+            SOURCE_FILE="main.c"
+          else
+            echo "Error: main.c not found"
+            find . -name "main.c" -type f
+            exit 1
+          fi
+          
+          echo "Compiling: $SOURCE_FILE"
+          
           xcrun -sdk ${{ matrix.config.sdk }} clang \
             -arch ${{ matrix.config.arch }} \
-            -c main.c \
+            -c "$SOURCE_FILE" \
             -o insert_dylib.o \
             -Os \
             -mios-version-min=${{ matrix.config.deployment_target }}
@@ -52,7 +78,7 @@ jobs:
           # 创建静态库
           ar rcs ${{ env.STATIC_LIB_NAME }} insert_dylib.o
           
-          # 生成头文件（根据 main.c 中的函数声明）
+          # 生成头文件
           cat > insert_dylib.h << 'EOF'
           #ifndef INSERT_DYLIB_H
           #define INSERT_DYLIB_H
@@ -64,7 +90,6 @@ jobs:
           extern "C" {
           #endif
           
-          // 命令行入口函数
           int insert_dylib_main(int argc, const char* argv[]);
           
           #ifdef __cplusplus
